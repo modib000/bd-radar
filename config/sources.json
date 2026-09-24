@@ -1,0 +1,21 @@
+{
+  "_note": "Everything here is optional to edit. Paid sources only switch on when their key is added as a GitHub Secret.",
+  "newsFeeds": [
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://www.theblock.co/rss.xml",
+    "https://blockworks.co/feed",
+    "https://decrypt.co/feed",
+    "https://cointelegraph.com/rss"
+  ],
+  "fundingLookbackDays": 30,
+  "telegramChannels": ["web3hiring", "cryptojobslist", "remoteweb3jobs"],
+  "farcasterQueries": ["hiring engineer", "we're hiring developer"],
+  "xQueries": [
+    "(\"we're hiring\" OR \"we are hiring\" OR \"join our team\") (engineer OR developer) (crypto OR web3 OR defi OR blockchain OR stablecoin) -is:retweet"
+  ],
+  "apollo": {
+    "titles": ["CTO", "Chief Technology Officer", "VP Engineering", "Head of Engineering", "Engineering Director", "Director of Engineering"],
+    "dailyLimit": 8,
+    "minScore": 16
+  }
+}
