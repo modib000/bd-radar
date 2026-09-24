@@ -275,6 +275,8 @@ select.status{border:0;appearance:none;-webkit-appearance:none;cursor:pointer;pa
 
 .seg-s{background:var(--social)}
 .app[hidden]{display:none}
+body.demo #refreshbtn,body.demo #forget{display:none}
+body.demo .datapanel .sub{display:none}
 .qrow .meta b .tag{display:inline-block;vertical-align:1px}
 .lock{position:fixed;inset:0;display:grid;place-items:center;padding:24px;background:var(--bg);z-index:50}
 .lockcard{width:min(400px,100%);background:var(--surface);border:1px solid var(--line);border-radius:26px;padding:30px 28px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:14px}
@@ -293,7 +295,7 @@ a.btn{text-decoration:none}
 </style>
 </head>
 <body>
-<div class="lock" id="lock"><form class="lockcard" id="lock-form" autocomplete="off"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" stroke-width="2.2" stroke-linecap="round" width="24" height="24"><circle cx="12" cy="12" r="2.2"/><path d="M12 5a7 7 0 0 1 7 7M12 1.8A10.2 10.2 0 0 1 22.2 12M12 19a7 7 0 0 1-7-7"/></svg></div><h1>BD Radar</h1><p id="lock-msg">Enter your passphrase to unlock today's leads.</p><input type="password" id="pass" placeholder="Passphrase" aria-label="Passphrase"><label class="rem"><input type="checkbox" id="remember" checked> Remember on this device</label><div class="err" id="lock-err"></div><button class="btn primary" id="unlock" type="submit" style="justify-content:center">Unlock</button></form></div>
+<div class="lock" id="lock"><form class="lockcard" id="lock-form" autocomplete="off"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" stroke-width="2.2" stroke-linecap="round" width="24" height="24"><circle cx="12" cy="12" r="2.2"/><path d="M12 5a7 7 0 0 1 7 7M12 1.8A10.2 10.2 0 0 1 22.2 12M12 19a7 7 0 0 1-7-7"/></svg></div><h1>BD Radar</h1><p id="lock-msg">Enter your passphrase to unlock today's leads.</p><input type="password" id="pass" placeholder="Passphrase" aria-label="Passphrase"><label class="rem"><input type="checkbox" id="remember" checked> Remember on this device</label><div class="err" id="lock-err"></div><button class="btn primary" id="unlock" type="submit" style="justify-content:center">Unlock</button><a class="btn ghost" href="?demo" style="justify-content:center">View the demo</a></form></div>
 <div class="app" hidden>
   <nav class="rail" aria-label="Main">
     <div class="brand">

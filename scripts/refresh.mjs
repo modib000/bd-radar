@@ -410,6 +410,13 @@ async function main() {
   const payload = { generatedAt: NOW.toISOString(), date: TODAY, companies, sources, history: H };
   await mkdir(new URL("data/", ROOT), { recursive: true });
   await writeFile(DATA_FILE, JSON.stringify(await encrypt(payload)));
+  // Public demo for your CV: same leads, contact details removed, no history.
+  const demo = {
+    generatedAt: payload.generatedAt, date: TODAY, demo: true,
+    companies: companies.map(c => ({ ...c, contact: c.contact && c.contact.name ? { name: "", title: c.contact.title || "", hidden: true } : null })),
+    sources: Object.fromEntries(Object.entries(sources).map(([k, v]) => [k, { ok: v.ok, count: v.count, notes: [] }]))
+  };
+  await writeFile(new URL("data/demo.json", ROOT), JSON.stringify(demo));
   console.log(`Done: ${companies.length} companies, ${companies.filter(c => c.isNew).length} new today, ${companies.filter(c => c.tier === "hot").length} hot.`);
 }
 main().catch(e => { console.error(e); process.exit(1); });

@@ -10,6 +10,8 @@ const DWORDS = new Set(Object.values(DSYN).join(" ").split(" ").concat(["full st
 const COLORS = ["#3D5AFE","#0B9483","#C77700","#D6336C","#7E57C2","#00897B","#5C6BC0","#EF6C00","#2E7D32","#AD1457"];
 const TIERS = [["hot","Hot","Score 16 to 20"],["strong","Strong","Score 12 to 15"],["watch","Watch","Score 11 or under"]];
 const $ = id => document.getElementById(id);
+const DEMO = new URLSearchParams(location.search).has("demo");
+const PFX = DEMO ? "bdr-demo-" : "bdr-";
 const esc = s => String(s ?? "").replace(/[&<>"]/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
 const store = {get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -33,6 +35,11 @@ async function decryptFile(file, pass) {
 }
 let FILE = null;
 async function boot() {
+  if (DEMO) {
+    try { const r = await fetch("data/demo.json?t=" + Date.now(), { cache: "no-store" }); if (!r.ok) throw 0; start(await r.json()); }
+    catch (e) { $("lock-msg").textContent = "The demo isn't ready yet. Check back tomorrow."; $("lock-form").style.display = "none"; }
+    return;
+  }
   try {
     const r = await fetch("data/leads.enc.json?t=" + Date.now(), { cache: "no-store" });
     if (!r.ok) throw new Error("missing");
@@ -55,10 +62,10 @@ $("lock-form").onsubmit = async e => {
 };
 
 // ---------- state ----------
-let DATA, list = [], S = store.get("bdr-v3", {}), CANDS = store.get("bdr-cands", []);
+let DATA, list = [], S = store.get(PFX + "v3", {}), CANDS = store.get(PFX + "cands", []);
 CANDS.forEach(k => { if (k.disc && k.disc.length) k.skills = [...new Set([...k.disc.filter(d => d !== "Leadership" && d !== "Software").map(d => d.toLowerCase().replace("data & ai", "data")), ...k.skills])]; delete k.disc; });
-const save = () => store.set("bdr-v3", S);
-const saveC = () => store.set("bdr-cands", CANDS);
+const save = () => store.set(PFX + "v3", S);
+const saveC = () => store.set(PFX + "cands", CANDS);
 const st = c => S[c.name] || {};
 function stage(c) { const s = st(c); if (s.stage === "pass" && s.passSig && s.passSig !== c.sig) return ""; return s.stage || ""; }
 const snoozed = c => { const s = st(c); return !stage(c) && s.snooze && dayDiff(s.snooze) > 0; };
@@ -94,7 +101,7 @@ const computeMatches = () => list.forEach(c => c.matches = matchesFor(c));
 const initials = n => n.replace(/[^A-Za-z0-9 ]/g, "").split(" ").filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || n[0];
 const av = c => `<div class="avatar" style="background:${c.color}">${esc(initials(c.name))}</div>`;
 const what = c => c.roles.length ? c.roles.map(r => r.title).join(", ") : c.funding ? `${fmtM(c.funding.amountM)}, ${c.funding.round}` : (c.social[0] && c.social[0].text) || "";
-const contactLine = c => c.contact && c.contact.name ? `${c.contact.name}, ${c.contact.title || ""}` : "CTO or Head of Engineering";
+const contactLine = c => c.contact && c.contact.name ? `${c.contact.name}, ${c.contact.title || ""}` : c.contact && c.contact.hidden ? `${c.contact.title || "Decision maker"} (hidden in demo)` : "CTO or Head of Engineering";
 function tags(c) {
   return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.stale ? '<span class="tag t-stale">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
 }
@@ -108,12 +115,16 @@ function start(d) {
     mtext: [c.name, c.vertical, c.roles.map(r => r.title).join(" "), c.disc.map(x => DSYN[x] || "").join(" "), c.funding && c.funding.headline, c.social.map(s => s.text).join(" ")].join(" ").toLowerCase()
   }));
   $("lock").remove();
+  if (DEMO) {
+    document.body.classList.add("demo");
+    if (!store.get(PFX + "seeded", false)) { $("f-sample").click(); store.set(PFX + "seeded", true); }
+  }
   document.querySelector(".app").hidden = false;
   const hr = new Date().getHours();
-  $("greet").textContent = (hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening") + ", Mo";
+  $("greet").textContent = DEMO ? "BD Radar demo" : (hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening") + ", Mo";
   const gen = new Date(d.generatedAt);
   const fresh = (Date.now() - gen) / DAY < 1.5;
-  $("rail-foot").innerHTML = `<b><span class="dot ${fresh ? "live" : ""}"></span>${fresh ? "Live" : "Refresh overdue"}</b>Updated ${gen.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} at ${gen.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}. Refreshes every morning.`;
+  $("rail-foot").innerHTML = DEMO ? `<b><span class="dot ${fresh ? "live" : ""}"></span>Demo</b>Live leads from ${gen.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}. Contact details hidden. Your clicks stay in your browser.` : `<b><span class="dot ${fresh ? "live" : ""}"></span>${fresh ? "Live" : "Refresh overdue"}</b>Updated ${gen.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} at ${gen.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}. Refreshes every morning.`;
   setupFilters();
   renderSources();
   refresh();
@@ -202,7 +213,7 @@ function render() {
     <td><div class="tags">${tags(c)}</div></td>
     <td><span class="score">${c.score}<span class="meter"><i class="${c.tier}" style="width:${c.score * 5}%"></i></span></span></td>
     <td><div class="role" title="${esc(what(c))}" style="color:var(--ink)">${esc(what(c))}</div><div class="role" style="font-size:12px">${c.disc.length ? esc(c.disc.join(" · ")) : c.funding ? "Roles not live yet" : "From social"}</div></td>
-    <td><div class="role" style="max-width:220px">${c.contact && c.contact.name ? '<span class="tag t-ok" style="margin-right:6px">Apollo</span>' : ""}${esc(contactLine(c))}</div></td>
+    <td><div class="role" style="max-width:220px">${c.contact && (c.contact.name || c.contact.hidden) ? '<span class="tag t-ok" style="margin-right:6px">Apollo</span>' : ""}${esc(contactLine(c))}</div></td>
     <td><select class="status stagesel" data-s="${stage(c)}" data-id="${c.id}" aria-label="Stage for ${esc(c.name)}"><option value="" ${!stage(c) ? "selected" : ""}>Not triaged</option>${STAGES.map(s => `<option value="${s[0]}" ${stage(c) === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}</select></td>
     <td><span class="due ${dueCls(nextOf(c))}">${nextOf(c) ? dueLabel(nextOf(c)) : (snoozed(c) ? "Snoozed" : "")}</span></td></tr>`).join("")
     + (r.length > 300 ? `<tr><td colspan="7"><div class="empty">Showing the top 300 of ${r.length}. Narrow the filters to see the rest.</div></td></tr>` : "")
@@ -238,7 +249,7 @@ function drawHTML() {
      <div class="sect"><h4>Candidates who fit</h4>${c.matches.length ? `<div class="mlist">${c.matches.map(m => `<div class="mitem"><div><b>${esc(m.k.name)}</b><br><span>${esc(m.k.role)}</span></div><span style="text-align:right">${esc(m.s.join(", "))}</span></div>`).join("")}</div>` : `<p style="color:var(--muted);font-size:13px">${CANDS.length ? "None of your candidates fit this one yet." : "Add candidates and the ones who fit will show here."}</p>`}</div>
      <div class="sect"><h4>Signals</h4><div class="signals">${sigs.join("")}</div></div>
      <div class="sect"><h4>Who to approach</h4>
-       <div class="contact"><div class="pic">${I.person}</div><div style="flex:1;min-width:0"><b>${esc(K && K.name ? K.name : "CTO or Head of Engineering")}</b><span>${K && K.name ? esc([K.title, K.email].filter(Boolean).join(" · ")) : "No name yet. Apollo looks up Hot leads automatically once connected."}</span></div>${K && K.linkedin ? `<a class="tag t-ok" href="${esc(K.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>` : ""}</div>
+       <div class="contact"><div class="pic">${I.person}</div><div style="flex:1;min-width:0"><b>${esc(K && K.name ? K.name : K && K.hidden ? (K.title || "Decision maker") : "CTO or Head of Engineering")}</b><span>${K && K.name ? esc([K.title, K.email].filter(Boolean).join(" · ")) : K && K.hidden ? "Found by Apollo. Name and email hidden in the demo." : "No name yet. Apollo looks up Hot leads automatically once connected."}</span></div>${K && K.linkedin ? `<a class="tag t-ok" href="${esc(K.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>` : ""}</div>
        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><a class="btn tonal" href="https://www.linkedin.com/search/results/people/?keywords=${li}" target="_blank" rel="noopener" style="text-decoration:none">${I.person}Find on LinkedIn</a>${c.domain ? `<a class="btn ghost" href="https://app.apollo.io/#/people?qOrganizationDomains[]=${encodeURIComponent(c.domain)}" target="_blank" rel="noopener" style="text-decoration:none">Open in Apollo</a>` : ""}</div>
      </div>
      <div class="sect"><h4>Notes</h4><textarea id="note" placeholder="Call notes, who you messaged, what they said">${esc(s.note || "")}</textarea></div>
