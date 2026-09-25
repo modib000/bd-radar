@@ -34,6 +34,7 @@ jobs:
           APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
           TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
           NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Save today's data
         run: |
