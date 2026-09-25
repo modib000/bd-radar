@@ -8,30 +8,6 @@
     "https://cointelegraph.com/rss"
   ],
   "fundingLookbackDays": 30,
-  "telegramChannels": [
-    "web3hiring",
-    "cryptojobslist",
-    "remoteweb3jobs"
-  ],
-  "farcasterQueries": [
-    "hiring engineer",
-    "we're hiring developer"
-  ],
-  "xQueries": [
-    "(\"we're hiring\" OR \"we are hiring\" OR \"join our team\") (engineer OR developer) (crypto OR web3 OR defi OR blockchain OR stablecoin) -is:retweet"
-  ],
-  "apollo": {
-    "titles": [
-      "CTO",
-      "Chief Technology Officer",
-      "VP Engineering",
-      "Head of Engineering",
-      "Engineering Director",
-      "Director of Engineering"
-    ],
-    "dailyLimit": 8,
-    "minScore": 16
-  },
   "vcBoards": [
     {
       "name": "Dragonfly",
@@ -72,10 +48,105 @@
     {
       "name": "Framework Ventures",
       "url": "https://jobs.framework.ventures"
+    },
+    {
+      "name": "Blockchain Capital",
+      "url": "https://jobs.blockchaincapital.com"
+    },
+    {
+      "name": "1kx",
+      "url": "https://jobs.1kx.network"
+    },
+    {
+      "name": "Hack VC",
+      "url": "https://jobs.hack.vc"
+    },
+    {
+      "name": "Robot Ventures",
+      "url": "https://jobs.robvc.com"
+    },
+    {
+      "name": "Lightspeed Faction",
+      "url": "https://jobs.lsvp.com"
     }
+  ],
+  "jobSites": [
+    {
+      "name": "Cryptocurrency Jobs",
+      "type": "rss",
+      "url": "https://cryptocurrencyjobs.co/index.xml"
+    },
+    {
+      "name": "CryptoJobsList",
+      "type": "rss",
+      "url": "https://cryptojobslist.com/rss"
+    },
+    {
+      "name": "Remote3",
+      "type": "rss",
+      "url": "https://www.remote3.co/rss"
+    }
+  ],
+  "telegramChannels": [
+    "web3hiring",
+    "cryptojobslist",
+    "remoteweb3jobs"
+  ],
+  "xQueries": [
+    "(\"we're hiring\" OR \"we are hiring\" OR \"join our team\") (engineer OR developer) (crypto OR web3 OR defi OR blockchain OR stablecoin) -is:retweet"
+  ],
+  "xAccounts": [
+    "ustyianskyi"
+  ],
+  "xSignalQueries": [
+    "(\"followed by\" OR \"new follows\" OR \"smart money\" OR \"started following\") (a16z OR paradigm OR polychain OR multicoin OR dragonfly OR \"pantera\") -is:retweet"
   ],
   "github": {
     "enabled": true,
     "maxCompaniesPerDay": 60
+  },
+  "farcasterQueries": [
+    "hiring engineer",
+    "we're hiring developer"
+  ],
+  "apollo": {
+    "titles": [
+      "CTO",
+      "Chief Technology Officer",
+      "VP Engineering",
+      "Head of Engineering",
+      "Engineering Director",
+      "Director of Engineering"
+    ],
+    "dailyLimit": 8,
+    "minScore": 16
+  },
+  "locationBoost": {
+    "strong": [
+      "london",
+      "united kingdom",
+      "uk",
+      "england",
+      "scotland",
+      "manchester",
+      "edinburgh"
+    ],
+    "some": [
+      "remote",
+      "europe",
+      "emea",
+      "ireland",
+      "dublin",
+      "berlin",
+      "amsterdam",
+      "paris",
+      "lisbon",
+      "zurich",
+      "zug",
+      "madrid",
+      "barcelona",
+      "warsaw",
+      "prague"
+    ]
   }
 }

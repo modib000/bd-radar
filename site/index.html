@@ -275,6 +275,8 @@ select.status{border:0;appearance:none;-webkit-appearance:none;cursor:pointer;pa
 
 .seg-s{background:var(--social)}
 .app[hidden]{display:none}
+.srcgroup{font-size:13px;font-weight:700;color:var(--muted);margin:22px 0 10px;letter-spacing:.01em}
+#srcs .srcgroup:first-child{margin-top:4px}
 body.demo #refreshbtn,body.demo #forget{display:none}
 body.demo .datapanel .sub{display:none}
 .qrow .meta b .tag{display:inline-block;vertical-align:1px}
@@ -346,6 +348,8 @@ a.btn{text-decoration:none}
           <button class="chip" data-sig="funding" aria-pressed="false">Raised</button>
           <button class="chip" data-sig="social" aria-pressed="false">Social</button>
           <button class="chip" data-sig="stale" aria-pressed="false">Stale roles</button>
+          <button class="chip" data-sig="surge" aria-pressed="false">Surge</button>
+          <button class="chip" data-sig="ukeu" aria-pressed="false">UK &amp; Europe</button>
           <button class="chip" data-sig="vc" aria-pressed="false">VC backed</button>
           <button class="chip" data-sig="dev" aria-pressed="false">GitHub spike</button>
           <button class="chip" data-sig="match" aria-pressed="false">Candidate match</button>
@@ -400,7 +404,7 @@ a.btn{text-decoration:none}
       <section class="view" id="v-sources">
         <h1>Sources</h1>
         <p class="sub">What feeds the radar every morning. Paid sources switch on as soon as you add their key in GitHub under Settings, Secrets and variables, Actions.</p>
-        <div class="srcgrid" id="srcs"></div>
+        <div id="srcs"></div>
         <div class="panel datapanel"><div class="panel-head"><h2>Your data</h2><span>Stages, notes, follow ups and candidates live in this browser</span></div><p class="sub" style="margin:0">Back them up now and then, or move them to another device.</p><div class="row"><button class="btn primary" id="export">Export backup</button><button class="btn ghost" id="import">Import backup</button><input type="file" id="importfile" accept="application/json" hidden><button class="btn ghost" id="forget">Lock and forget passphrase</button></div></div>
       </section>
     </div>

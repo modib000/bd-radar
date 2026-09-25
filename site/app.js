@@ -103,7 +103,7 @@ const av = c => `<div class="avatar" style="background:${c.color}">${esc(initial
 const what = c => c.roles.length ? c.roles.map(r => r.title).join(", ") : c.funding ? `${fmtM(c.funding.amountM)}, ${c.funding.round}` : c.social[0] ? c.social[0].text : c.dev ? `${c.dev.contributors} active engineers on GitHub` : "";
 const contactLine = c => c.contact && c.contact.name ? `${c.contact.name}, ${c.contact.title || ""}` : c.contact && c.contact.hidden ? `${c.contact.title || "Decision maker"} (hidden in demo)` : "CTO or Head of Engineering";
 function tags(c) {
-  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.backers && c.backers.length ? '<span class="tag t-plain">VC backed</span>' : ""}${c.stale ? '<span class="tag t-stale">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
+  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.surge ? '<span class="tag t-p1">Surge</span>' : ""}${c.social.some(x => x.via) ? '<span class="tag t-social">Flagged on X</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.closing.length >= 2 ? '<span class="tag t-plain">Closing fast</span>' : ""}${c.backers && c.backers.length ? '<span class="tag t-plain">VC backed</span>' : ""}${c.stale ? '<span class="tag t-stale">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
 }
 
 // ---------- start ----------
@@ -112,13 +112,12 @@ function start(d) {
   list = d.companies.map(c => Object.assign(c, {
     color: COLORS[[...c.name].reduce((a, ch) => a + ch.charCodeAt(0), 0) % COLORS.length],
     sig: `r${c.roles.length}f${c.funding ? c.funding.date : ""}s${c.social.length}d${c.dev && c.dev.spike ? 1 : 0}`,
-    backers: c.backers || [], dev: c.dev || null,
+    backers: c.backers || [], dev: c.dev || null, sites: c.sites || [], closing: c.closing || [], closed: c.closed || [], surge: c.surge || null, loc: c.loc || "",
     mtext: [c.name, c.vertical, c.roles.map(r => r.title).join(" "), c.disc.map(x => DSYN[x] || "").join(" "), c.funding && c.funding.headline, c.social.map(s => s.text).join(" "), (c.backers || []).join(" ")].join(" ").toLowerCase()
   }));
   $("lock").remove();
   if (DEMO) {
     document.body.classList.add("demo");
-    if (!store.get(PFX + "seeded", false)) { $("f-sample").click(); store.set(PFX + "seeded", true); }
   }
   document.querySelector(".app").hidden = false;
   const hr = new Date().getHours();
@@ -192,7 +191,7 @@ document.querySelectorAll("[data-sig]").forEach(b => b.onclick = () => setSig(b.
 $("min").oninput = () => { minS = +$("min").value; $("minv").textContent = minS; render(); };
 $("q").oninput = e => { q = e.target.value.toLowerCase(); if (!$("v-radar").classList.contains("on")) go("radar"); render(); };
 document.querySelectorAll("[data-sort]").forEach(b => b.onclick = () => { sortKey = b.dataset.sort; render(); });
-const EMPTY = { vc: "No VC portfolio roles yet. Check the VC boards card on the Sources page.", dev: "No GitHub spikes today. The check rotates through companies, so more show up over the week.", social: "No social signals today. Hiring posts from Telegram, Farcaster and X land here.", match: "No matches yet. Add candidates and every lead gets checked against them.", due: "No follow ups due today.", triage: "Everything's triaged. Nice.", stale: "No stale roles right now.", new: "Nothing new today yet." };
+const EMPTY = { surge: "No hiring surges this week. They need a week of history, so they start showing after 7 days of runs.", ukeu: "No UK or European roles in the current list.", vc: "No VC portfolio roles yet. Check the VC boards card on the Sources page.", dev: "No GitHub spikes today. The check rotates through companies, so more show up over the week.", social: "No social signals today. Hiring posts from Telegram, Farcaster and X land here.", match: "No matches yet. Add candidates and every lead gets checked against them.", due: "No follow ups due today.", triage: "Everything's triaged. Nice.", stale: "No stale roles right now.", new: "Nothing new today yet." };
 function render() {
   if (!DATA) return;
   const order = Object.fromEntries([["", -1], ...STAGES.map((s, i) => [s[0], i])]);
@@ -201,6 +200,7 @@ function render() {
     if (sig === "new" && !c.isNew) return false;
     if (sig === "hiring" && !c.roles.length) return false; if (sig === "funding" && !c.funding) return false;
     if (sig === "social" && !c.social.length) return false; if (sig === "stale" && !c.stale) return false;
+    if (sig === "surge" && !c.surge) return false; if (sig === "ukeu" && !c.loc) return false;
     if (sig === "vc" && !c.backers.length) return false; if (sig === "dev" && !(c.dev && c.dev.spike)) return false;
     if (sig === "match" && !c.matches.length) return false; if (sig === "due" && !isDue(c)) return false;
     if (vert !== "All" && c.vertical !== vert) return false; if (dsc !== "All" && !c.disc.includes(dsc)) return false;
@@ -235,11 +235,13 @@ function drawHTML() {
   const tierName = { hot: "Hot account", strong: "Strong lead", watch: "Watch" }[c.tier];
   const li = encodeURIComponent(`${c.name} (CTO OR "VP Engineering" OR "Head of Engineering")`);
   const sigs = [];
-  if (c.roles.length) sigs.push(`<div class="sig"><div class="ico t-hire">${I.hire}</div><div style="min-width:0"><b>${c.roles.length} open engineering role${c.roles.length > 1 ? "s" : ""}${c.newRoles ? ` · ${c.newRoles} new today` : ""}</b>${c.roles.slice(0, 12).map(r => `<span style="display:block;margin-top:3px"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a> · ${esc(r.location || "Location not listed")} · first seen ${ago(r.age)}${r.age >= 30 ? ' <span class="tag t-stale">Stale</span>' : ""}</span>`).join("")}${c.roles.length > 12 ? `<span>and ${c.roles.length - 12} more</span>` : ""}</div></div>`);
+  if (c.roles.length) sigs.push(`<div class="sig"><div class="ico t-hire">${I.hire}</div><div style="min-width:0"><b>${c.roles.length} open engineering role${c.roles.length > 1 ? "s" : ""}${c.newRoles ? ` · ${c.newRoles} new today` : ""}</b>${c.roles.slice(0, 12).map(r => `<span style="display:block;margin-top:3px"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a> · ${esc(r.location || "Location not listed")}${r.salary ? ` · <b style="display:inline;font-size:inherit">${esc(r.salary)}</b>` : ""} · first seen ${ago(r.age)}${r.via ? ` · via ${esc(r.via)}` : ""}${r.age >= 30 ? ' <span class="tag t-stale">Stale</span>' : ""}</span>`).join("")}${c.roles.length > 12 ? `<span>and ${c.roles.length - 12} more</span>` : ""}</div></div>`);
   if (F) sigs.push(`<div class="sig"><div class="ico t-fund">${I.fund}</div><div><b>Raised ${fmtM(F.amountM)} · ${esc(F.round)}</b><span>${esc(F.date)}. ${F.url ? `<a href="${esc(F.url)}" target="_blank" rel="noopener">${esc(F.headline)}</a>` : esc(F.headline)}${F.investors && F.investors.length ? `<br>Investors: ${esc(F.investors.join(", "))}` : ""}</span></div></div>`);
+  if (c.surge) sigs.push(`<div class="sig"><div class="ico t-stale">${I.hire}</div><div><b>Hiring surge</b><span>Engineering roles went from ${c.surge.from} to ${c.surge.to} in about a week.</span></div></div>`);
+  if (c.closed.length) sigs.push(`<div class="sig"><div class="ico t-plain">${I.hire}</div><div><b>${c.closed.length} role${c.closed.length > 1 ? "s" : ""} closed in the last 30 days</b>${c.closed.slice(0, 6).map(x => `<span style="display:block;margin-top:3px">${esc(x.title)} · open ${x.openDays} day${x.openDays === 1 ? "" : "s"} · closed ${esc(x.closed)}</span>`).join("")}${c.closing.length >= 2 ? `<span style="display:block;margin-top:4px">Several closed quickly. Worth asking who's filling them.</span>` : ""}</div></div>`);
   if (c.dev && c.dev.spike) sigs.push(`<div class="sig"><div class="ico t-social"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></div><div><b>Engineering team growing on GitHub</b><span>${c.dev.contributors} people committed code in the last 30 days, up from ${c.dev.prevContributors} the month before${c.dev.newRepos ? `, and ${c.dev.newRepos} new public repos in 2 weeks` : ""}. <a href="https://github.com/${esc(c.dev.org)}" target="_blank" rel="noopener">github.com/${esc(c.dev.org)}</a></span></div></div>`);
   if (c.backers.length) sigs.push(`<div class="sig"><div class="ico t-fund">${I.fund}</div><div><b>Backed by ${esc(c.backers.join(", "))}</b><span>Roles found on ${c.backers.length > 1 ? "their" : "the"} portfolio job board${c.backers.length > 1 ? "s" : ""}.</span></div></div>`);
-  c.social.forEach(p => sigs.push(`<div class="sig"><div class="ico t-social">${I.chat}</div><div><b>${esc(p.platform)} · ${esc(p.date)}</b><span><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.text)}</a></span></div></div>`));
+  c.social.forEach(p => sigs.push(`<div class="sig"><div class="ico t-social">${I.chat}</div><div><b>${p.via ? `Flagged by ${esc(p.via === "search" ? "a smart money tracker" : p.via)} on X` : esc(p.platform)} · ${esc(p.date)}</b><span><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.text)}</a></span></div></div>`));
   drawer.innerHTML = `
    <div class="dhead">${av(c)}<div style="flex:1;min-width:0"><h3>${esc(c.name)}</h3><p>${esc(c.vertical)}${c.locations.length ? " · " + esc(c.locations.join(", ")) : ""}${c.domain ? ` · <a href="https://${esc(c.domain)}" target="_blank" rel="noopener">${esc(c.domain)}</a>` : ""}</p></div><button class="iconbtn" id="close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
    <div class="dbody">
@@ -313,16 +315,19 @@ function renderSources() {
   const S2 = DATA.sources || {};
   const live = (k, paid) => { const s = S2[k]; if (!s) return ["Planned", "t-plain"]; if (!s.ok && paid) return ["Add key", "t-p1"]; return [`Live · ${s.count}`, "t-ok"]; };
   const cards = [
-    ["Company job boards", "Greenhouse, Lever, Ashby and Workable boards for every watchlist company, plus any newly funded or social company that has one.", "Free", live("jobs"), S2.jobs],
+    ["Company job boards", "Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee, Personio, Teamtailor and BambooHR boards for every watchlist company, plus any company the radar has found before.", "Free", live("jobs"), S2.jobs],
+    ["VC portfolio job boards", "Every engineering role across Dragonfly, Polychain, Multicoin, Paradigm, Pantera, Variant, Blockchain Capital and more. Edit the list in config/sources.json.", "Free", live("vc"), S2.vc],
+    ["Crypto job sites", "Cryptocurrency Jobs, CryptoJobsList and Remote3, which list hundreds of companies you wouldn't think to watch.", "Free", live("sites"), S2.sites],
     ["Funding rounds", "DeFiLlama raises plus raise headlines from CoinDesk, The Block, Blockworks, Decrypt and Cointelegraph.", "Free", live("funding"), S2.funding],
     ["Telegram", "Public crypto job channels, read daily for \"X is hiring Y\" posts.", "Free", live("telegram"), S2.telegram],
+    ["X (Twitter)", "Hiring posts across crypto, plus projects flagged by accounts you track, like @ustyianskyi. Edit the accounts in config/sources.json.", "About $15/mo via TwitterAPI.io, add TWITTERAPI_KEY", live("x", true), S2.x],
+    ["GitHub activity", "Flags companies where more people are committing code than last month, often before roles go public. Checks about 60 companies a day on rotation.", "Free", live("github"), S2.github],
     ["Farcaster", "Hiring casts from crypto founders and builders.", "Free tier via Neynar, add NEYNAR_API_KEY", live("farcaster", true), S2.farcaster],
-    ["X (Twitter)", "Hiring posts across crypto, matched to companies.", "About $15/mo via TwitterAPI.io, add TWITTERAPI_KEY", live("x", true), S2.x],
-    ["Apollo.io", "Finds the CTO or Head of Engineering for new Hot leads, a few a day to save credits.", "Paid plan, add APOLLO_API_KEY", live("apollo", true), S2.apollo],
-    ["VC portfolio job boards", "Every engineering role across Dragonfly, Polychain, Multicoin, Paradigm, Pantera, Variant and more. Edit the list in config/sources.json.", "Free", live("vc"), S2.vc],
-    ["GitHub activity", "Flags companies where more people are committing code than last month, often before roles go public. Checks about 60 companies a day on rotation.", "Free", live("github"), S2.github]
+    ["Apollo.io", "Finds the CTO or Head of Engineering for new Hot leads, a few a day to save credits.", "Add APOLLO_API_KEY", live("apollo", true), S2.apollo]
   ];
-  $("srcs").innerHTML = cards.map(([t, d, cost, [lab, cls], info]) => `<div class="src"><div class="src-top"><h3>${t}</h3><span class="tag ${cls}">${lab}</span></div><p>${d}</p><div class="cost">${cost}</div>${info && info.notes && info.notes.length ? `<details><summary>Last run details</summary><ul>${info.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}</div>`).join("");
+  const GROUPS = [["Job sources", ["Company job boards", "VC portfolio job boards", "Crypto job sites"]], ["Social", ["Telegram", "X (Twitter)", "Farcaster"]], ["Signals and contacts", ["Funding rounds", "GitHub activity", "Apollo.io"]]];
+  const card = ([t, d, cost, [lab, cls], info]) => `<div class="src"><div class="src-top"><h3>${t}</h3><span class="tag ${cls}">${lab}</span></div><p>${d}</p><div class="cost">${cost}</div>${info && info.notes && info.notes.length ? `<details><summary>Last run details</summary><ul>${info.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}</div>`;
+  $("srcs").innerHTML = GROUPS.map(([g, names]) => `<h2 class="srcgroup">${g}</h2><div class="srcgrid">${names.map(n => card(cards.find(c => c[0] === n))).join("")}</div>`).join("");
 }
 $("refreshbtn").href = `https://github.com/${REPO}/actions/workflows/daily.yml`;
 

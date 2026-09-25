@@ -16,7 +16,7 @@ const KEYS = {
   github: process.env.GITHUB_TOKEN || ""
 };
 const DAY = 864e5;
-const NOW = new Date();
+const NOW = process.env.RADAR_NOW ? new Date(process.env.RADAR_NOW) : new Date();
 const TODAY = NOW.toISOString().slice(0, 10);
 const UA = { "User-Agent": "Mozilla/5.0 (BD Radar daily refresh)", "Accept": "*/*" };
 
@@ -95,51 +95,122 @@ function vertical(s) {
 }
 
 // ---------- ATS job boards ----------
+const fmtSalary = (min, max, cur, period) => {
+  if (!min && !max) return "";
+  const k = v => v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`;
+  const per = /hour/i.test(period || "") ? " an hour" : "";
+  return `${(cur || "").toUpperCase()} ${min && max && min !== max ? `${k(min)} to ${k(max)}` : k(min || max)}${per}`.trim();
+};
+const xmlTag = (b, tag) => { const m = b.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i")); return m ? strip(m[1].replace(/<!\[CDATA\[|\]\]>/g, "")) : ""; };
 const ATS = {
   greenhouse: {
     url: s => `https://boards-api.greenhouse.io/v1/boards/${s}/jobs`,
     parse: j => (j.jobs || []).map(x => ({ title: x.title, url: x.absolute_url, location: x.location && x.location.name, posted: x.first_published || x.updated_at }))
   },
+  ashby: {
+    url: s => `https://api.ashbyhq.com/posting-api/job-board/${s}?includeCompensation=true`,
+    parse: j => (j.jobs || []).filter(x => x.isListed !== false).map(x => ({ title: x.title, url: x.jobUrl, location: x.location, posted: x.publishedAt, salary: (x.compensation && (x.compensation.scrapeableCompensationSalarySummary || x.compensation.compensationTierSummary)) || "" }))
+  },
   lever: {
     url: s => `https://api.lever.co/v0/postings/${s}?mode=json`,
-    parse: j => (Array.isArray(j) ? j : []).map(x => ({ title: x.text, url: x.hostedUrl, location: x.categories && x.categories.location, posted: x.createdAt ? new Date(x.createdAt).toISOString() : null }))
-  },
-  ashby: {
-    url: s => `https://api.ashbyhq.com/posting-api/job-board/${s}`,
-    parse: j => (j.jobs || []).filter(x => x.isListed !== false).map(x => ({ title: x.title, url: x.jobUrl, location: x.location, posted: x.publishedAt }))
+    parse: j => (Array.isArray(j) ? j : []).map(x => ({ title: x.text, url: x.hostedUrl, location: x.categories && x.categories.location, posted: x.createdAt ? new Date(x.createdAt).toISOString() : null, salary: x.salaryRange ? fmtSalary(x.salaryRange.min, x.salaryRange.max, x.salaryRange.currency, x.salaryRange.interval) : "" }))
   },
   workable: {
     url: s => `https://apply.workable.com/api/v1/widget/accounts/${s}`,
     parse: j => (j.jobs || []).map(x => ({ title: x.title, url: x.url || x.shortlink, location: [x.city, x.country].filter(Boolean).join(", "), posted: x.published_on }))
+  },
+  smartrecruiters: {
+    url: s => `https://api.smartrecruiters.com/v1/companies/${s}/postings?limit=100`,
+    parse: (j, s) => (j.content || []).map(x => ({ title: x.name, url: `https://jobs.smartrecruiters.com/${s}/${x.id}`, location: x.location && [x.location.city, x.location.country].filter(Boolean).join(", ") + (x.location.remote ? " (Remote)" : ""), posted: x.releasedDate })),
+    valid: j => (j.totalFound || 0) > 0
+  },
+  recruitee: {
+    url: s => `https://${s}.recruitee.com/api/offers/`,
+    parse: j => (j.offers || []).map(x => ({ title: x.title, url: x.careers_url || x.url, location: x.location || [x.city, x.country].filter(Boolean).join(", "), posted: x.published_at || x.created_at, salary: x.salary && (x.salary.min || x.salary.max) ? fmtSalary(+x.salary.min, +x.salary.max, x.salary.currency, x.salary.period) : "" }))
+  },
+  personio: {
+    xml: true,
+    url: s => `https://${s}.jobs.personio.de/xml`,
+    parse: (t, s) => (t.match(/<position>[\s\S]*?<\/position>/gi) || []).map(b => ({ title: xmlTag(b, "name"), url: `https://${s}.jobs.personio.de/job/${xmlTag(b, "id")}`, location: xmlTag(b, "office"), posted: xmlTag(b, "createdAt") })),
+    valid: t => /<workzag-jobs|<position>/i.test(t)
+  },
+  teamtailor: {
+    xml: true,
+    url: s => `https://${s}.teamtailor.com/jobs.rss`,
+    parse: t => parseFeed(t).map(i => ({ title: i.title, url: i.link, location: "", posted: i.date })),
+    valid: t => /<rss|<feed/i.test(t) && /teamtailor/i.test(t)
+  },
+  bamboohr: {
+    url: s => `https://${s}.bamboohr.com/careers/list`,
+    parse: (j, s) => (j.result || []).map(x => ({ title: x.jobOpeningName, url: `https://${s}.bamboohr.com/careers/${x.id}`, location: x.location && [x.location.city, x.location.state, x.location.country].filter(Boolean).join(", "), posted: x.datePosted || null })),
+    valid: j => Array.isArray(j.result)
   }
 };
+const ATS_ORDER = Object.keys(ATS);
 function slugGuesses(c) {
   const n = c.name.toLowerCase();
-  return [...new Set([c.slug, n.replace(/[^a-z0-9]/g, ""), n.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""), n.split(/\s+/)[0].replace(/[^a-z0-9]/g, "")].filter(Boolean))];
+  return [...new Set([c.slug, n.replace(/[^a-z0-9]/g, ""), n.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")].filter(Boolean))];
 }
 async function tryBoard(type, slug) {
   try {
-    const r = await get(ATS[type].url(slug), {}, 1);
+    const A = ATS[type];
+    const r = await get(A.url(slug), {}, 1);
     if (!r.ok) return null;
+    if (A.xml) { const t = await r.text(); if (A.valid && !A.valid(t)) return null; return A.parse(t, slug); }
     const j = await r.json();
-    const jobs = ATS[type].parse(j);
     if (type === "lever" && !Array.isArray(j)) return null;
-    return jobs;
+    if (A.valid && !A.valid(j)) return null;
+    return A.parse(j, slug);
   } catch { return null; }
 }
+const DETECT = { budget: 160 };
 async function findBoard(c, cache) {
   const hit = cache[c.name];
   if (hit && hit.type) { const jobs = await tryBoard(hit.type, hit.slug); if (jobs) return { ...hit, jobs }; }
-  if (hit && hit.none && daysSince(hit.none) < 14 && !c.slug) return null;
+  if (hit && hit.none && hit.v === 2 && daysSince(hit.none) < 14 && !c.slug) return null;
+  if (!c.watch && DETECT.budget <= 0) return null;
+  if (!c.watch) DETECT.budget--;
   let empty = null;
-  for (const slug of slugGuesses(c)) for (const type of ["greenhouse", "ashby", "lever", "workable"]) {
+  for (const slug of slugGuesses(c)) for (const type of ATS_ORDER) {
     const jobs = await tryBoard(type, slug);
     if (jobs && jobs.length) { cache[c.name] = { type, slug }; return { type, slug, jobs }; }
     if (jobs && !empty) empty = { type, slug, jobs };
   }
   if (empty) { cache[c.name] = { type: empty.type, slug: empty.slug }; return empty; }
-  cache[c.name] = { none: TODAY };
+  cache[c.name] = { none: TODAY, v: 2 };
   return null;
+}
+
+// ---------- crypto job sites (aggregators) ----------
+function splitListing(title) {
+  const t = strip(title);
+  let m = t.match(/^(.{2,40}?)\s+is (?:hiring|looking for)(?: an?)?\s+(.{3,100}?)(?:\s+to join.*)?$/i); if (m) return { company: m[1], role: m[2] };
+  m = t.match(/^(.{3,100}?)\s+(?:at|@)\s+(.{2,40})$/i); if (m) return { company: m[2], role: m[1] };
+  m = t.match(/^(.{2,40}?)\s*[:|]\s*(.{3,100})$/); if (m) return isEng(m[2]) ? { company: m[1], role: m[2] } : { company: m[2], role: m[1] };
+  m = t.match(/^(.{3,100}?)\s+[-–]\s+(.{2,40})$/); if (m) return isEng(m[1]) ? { company: m[2], role: m[1] } : { company: m[1], role: m[2] };
+  return null;
+}
+async function jobSites(sites, report) {
+  const out = [];
+  await pool(sites, 3, async site => {
+    try {
+      let items = [];
+      if (site.type === "web3career") {
+        const token = process.env.WEB3CAREER_TOKEN;
+        if (!token) { report.push(`${site.name}: add a WEB3CAREER_TOKEN secret to switch on`); return; }
+        const j = await getJSON(`https://web3.career/api/v1?token=${token}&limit=100&tag=engineering`);
+        const arr = Array.isArray(j) ? j.find(x => Array.isArray(x)) || [] : (j.jobs || []);
+        items = arr.map(x => ({ company: x.company, role: x.title, url: x.apply_url || x.url, location: x.location || x.country || "", posted: x.date || x.date_epoch }));
+      } else {
+        const feed = parseFeed(await getText(site.url));
+        items = feed.map(i => { const sp = splitListing(i.title); return sp ? { company: sp.company, role: sp.role, url: i.link, location: "", posted: i.date } : null; }).filter(Boolean);
+      }
+      const eng = items.filter(i => i.company && i.role && isEng(i.role) && (!i.posted || daysSince(toISO(i.posted)) <= 45));
+      eng.forEach(i => out.push({ company: String(i.company).trim(), title: String(i.role).trim(), url: i.url, location: i.location, posted: toISO(i.posted), site: site.name }));
+      report.push(`${site.name}: ${items.length} listings, ${eng.length} engineering`);
+    } catch (e) { report.push(`${site.name}: ${e.message}`); }
+  });
+  return out;
 }
 
 // ---------- funding ----------
@@ -198,7 +269,7 @@ async function fundingFromDefiLlama(lookback, report) {
 
 // ---------- social ----------
 const HIRING = /\b(hiring|we're looking for|we are looking for|join (?:our|the) team|open role|now recruiting|job opening|come build)\b/i;
-const IS_HIRING = /(?:^|[•\n·|-]\s*)([A-Z][A-Za-z0-9.&' -]{1,38}?)\s+is (?:now )?hiring(?: an?)?\s+([^\n•|]{3,90})/g;
+const IS_HIRING = /(?:^|[•\n·|-]\s*)([A-Z][A-Za-z0-9.&' -]{1,38}?)\s+is (?:now )?(?:hiring|looking for)(?: an?)?\s+([^\n•|]{3,90}?)(?=\s+to join|\n|•|\||$)/g;
 function socialPosts(text) {
   const posts = [];
   for (const m of text.matchAll(IS_HIRING)) {
@@ -354,6 +425,35 @@ async function devActivity(org) {
   return { org, contributors: a, prevContributors: b, commits, newRepos, repos: repos.map(r => r.name), spike, checked: TODAY };
 }
 
+// ---------- X tracked accounts (pre-round signals) ----------
+const X_SKIP = new Set(["frontrunvc", "ustyianskyi", "home", "i", "search", "x", "twitter", "paradigm", "a16z", "a16zcrypto", "polychain", "multicoincap", "dragonfly_xyz", "dragonflycap", "panteracapital", "cbventures", "coinbaseventures", "haunventures", "variantfund", "placeholdervc", "electriccapital", "hackvc", "1kxnetwork", "blockchaincap", "robotventures", "frameworkvc", "binancelabs", "yzilabs", "sequoia", "lightspeedvp", "vitalikbuterin", "elonmusk", "cz_binance", "coinbase", "binance"]);
+let VC_NAMES = new Set();
+async function xAccounts(handles, queries, report) {
+  if (!KEYS.twitter) { report.push("No TWITTERAPI_KEY secret, tracked accounts skipped"); return []; }
+  const out = [];
+  const qs = [...handles.map(h => ({ q: `from:${h.replace(/^@/, "")}`, via: "@" + h.replace(/^@/, "") })), ...queries.map(q => ({ q, via: "search" }))];
+  for (const { q, via } of qs) {
+    try {
+      const j = await getJSON(`https://api.twitterapi.io/twitter/tweet/advanced_search?queryType=Latest&query=${encodeURIComponent(q + " since:" + new Date(NOW - 3 * DAY).toISOString().slice(0, 10))}`, { headers: { "X-API-Key": KEYS.twitter } });
+      const tweets = j.tweets || [];
+      let n = 0;
+      for (const t of tweets) {
+        const author = (t.author && t.author.userName || "").toLowerCase();
+        const ents = (t.entities && t.entities.user_mentions) || [];
+        const handlesIn = [...new Set([...ents.map(e => e.screen_name), ...[...String(t.text).matchAll(/@([A-Za-z0-9_]{2,15})/g)].map(m => m[1])])]
+          .filter(h => h && h.toLowerCase() !== author && !X_SKIP.has(h.toLowerCase()) && !VC_NAMES.has(norm(h)));
+        for (const h of handlesIn.slice(0, 6)) {
+          const e = ents.find(x => x.screen_name && x.screen_name.toLowerCase() === h.toLowerCase());
+          out.push({ platform: "X", handle: h, handleName: e && e.name, company: null, role: "", date: new Date(t.createdAt).toISOString().slice(0, 10), url: t.url, text: String(t.text).slice(0, 280), author: t.author && (t.author.name || t.author.userName), via });
+          n++;
+        }
+      }
+      report.push(`${via === "search" ? "Signal search" : via}: ${tweets.length} posts, ${n} projects mentioned`);
+    } catch (e) { report.push(`${via}: ${e.message}`); }
+  }
+  return out;
+}
+
 // ---------- Apollo ----------
 async function apolloContact(domain, titles) {
   const r = await get("https://api.apollo.io/api/v1/mixed_people/search", {
@@ -385,7 +485,13 @@ function score(c) {
     parts.push([a >= 50 ? 7 : a >= 10 ? 6 : a >= 3 ? 5 : a >= 1 ? 4 : 3, a ? `Raised $${+a.toFixed(1)}m` : "Raised, amount undisclosed"]);
     if (daysSince(c.funding.date) <= 14) parts.push([2, "Raise in the last 2 weeks"]);
   }
-  if (c.social.length) parts.push([2, `Hiring posts on ${[...new Set(c.social.map(s => s.platform))].join(" and ")}`]);
+  const flagged = c.social.filter(s => s.via), posts = c.social.filter(s => !s.via);
+  if (posts.length) parts.push([2, `Hiring posts on ${[...new Set(posts.map(s => s.platform))].join(" and ")}`]);
+  if (flagged.length) parts.push([3, `Flagged on X by ${[...new Set(flagged.map(s => s.via === "search" ? "smart money trackers" : s.via))].join(", ")}`]);
+  if (c.surge) parts.push([3, `Hiring surge: ${c.surge.from} to ${c.surge.to} roles in a week`]);
+  if (c.closing && c.closing.length >= 2) parts.push([1, `${c.closing.length} roles closed quickly, may be using another agency`]);
+  if (c.loc === "strong") parts.push([2, "Hiring in London or the UK"]); else if (c.loc === "some") parts.push([1, "Remote or European roles"]);
+  if (c.sites && c.sites.length) parts.push([1, `Advertising on ${c.sites.join(", ")}`]);
   if (c.backers && c.backers.length) parts.push([2, `Backed by ${c.backers.slice(0, 3).join(", ")}`]);
   if (c.dev && c.dev.spike) parts.push([2, "Engineering activity growing on GitHub"]);
   if (c.contact && c.contact.name) parts.push([2, "Decision maker found"]);
@@ -401,16 +507,22 @@ function story(c) {
   const R = c.roles, F = c.funding, bits = [];
   if (R.length) { const newest = Math.min(...R.map(r => r.age)); bits.push(`${R.length} open engineering role${R.length > 1 ? "s" : ""} (${c.disc.join(", ")}), newest posted ${newest === 0 ? "today" : newest === 1 ? "yesterday" : newest + " days ago"}.`); }
   if (F) bits.push(`Raised ${F.amountM ? "$" + (+F.amountM.toFixed(1)) + "m" : "an undisclosed amount"} (${F.round}) on ${F.date}.`);
-  if (c.social.length) bits.push(`Hiring posts on ${[...new Set(c.social.map(s => s.platform))].join(" and ")}.`);
+  const hp = c.social.filter(s => !s.via);
+  if (hp.length) bits.push(`Hiring posts on ${[...new Set(hp.map(s => s.platform))].join(" and ")}.`);
   if (c.dev && c.dev.spike) bits.push(`${c.dev.contributors} people committing code in the last 30 days, up from ${c.dev.prevContributors}${c.dev.newRepos ? `, plus ${c.dev.newRepos} new repos` : ""}.`);
   if (c.backers && c.backers.length) bits.push(`Backed by ${c.backers.join(", ")}.`);
+  if (c.surge) bits.push(`Engineering roles jumped from ${c.surge.from} to ${c.surge.to} in a week.`);
+  const fl = c.social.filter(s => s.via);
+  if (fl.length) bits.push(`Flagged on X by ${[...new Set(fl.map(s => s.via === "search" ? "smart money trackers" : s.via))].join(", ")}.`);
   c.why = bits.join(" ");
   const stale = R.filter(r => r.age >= 30).sort((a, b) => b.age - a.age)[0];
-  if (stale) c.angle = `Their ${stale.title} role has been open ${stale.age} days. Lead with one or two candidates you could put forward this week rather than a generic pitch.`;
+  if (c.surge) c.angle = `They've just ramped up engineering hiring fast. Offer to take a chunk of the new roles off their plate before they're overwhelmed.`;
+  else if (stale) c.angle = `Their ${stale.title} role has been open ${stale.age} days. Lead with one or two candidates you could put forward this week rather than a generic pitch.`;
   else if (F && R.length) c.angle = `Fresh capital plus live engineering roles. Offer to take the hardest role off their plate and show you can cover the rest of the build out.`;
   else if (F) c.angle = `Just raised. Engineering hiring usually follows within weeks, so get in before the roles go public and help shape the first hires.`;
   else if (R.length >= 3) c.angle = `Hiring across ${c.disc.join(", ")} at once. Pitch one specialist partner for the whole engineering push instead of role by role.`;
   else if (R.length) c.angle = `Open with a relevant candidate for the ${R[0].title} role and use it to start the wider conversation.`;
+  else if (fl.length) c.angle = `Smart money is circling, which often means a raise is close. Get on their radar now so you're the first call when they start hiring.`;
   else if (c.dev && c.dev.spike) c.angle = `Their engineering team is visibly growing on GitHub but the roles aren't public yet. Reach out early and offer to help them scale before they post.`;
   else c.angle = `Hiring chatter on social. Worth a light touch message to find out what's coming.`;
 }
@@ -435,7 +547,8 @@ async function main() {
 
   // 2. social
   const tgRep = [], fcRep = [], xRep = [];
-  const social = [...await telegram(cfg.telegramChannels || [], tgRep), ...await farcaster(cfg.farcasterQueries || [], fcRep), ...await xSearch(cfg.xQueries || [], xRep)];
+  VC_NAMES = new Set((cfg.vcBoards || []).map(b => norm(b.name)));
+  const social = [...await telegram(cfg.telegramChannels || [], tgRep), ...await farcaster(cfg.farcasterQueries || [], fcRep), ...await xSearch(cfg.xQueries || [], xRep), ...await xAccounts(cfg.xAccounts || [], cfg.xSignalQueries || [], xRep)];
   sources.telegram = { ok: true, count: social.filter(s => s.platform === "Telegram").length, notes: tgRep };
   sources.farcaster = { ok: !!KEYS.neynar, count: social.filter(s => s.platform === "Farcaster").length, notes: fcRep };
   sources.x = { ok: !!KEYS.twitter, count: social.filter(s => s.platform === "X").length, notes: xRep };
@@ -446,6 +559,12 @@ async function main() {
   watch.forEach(w => add(w.name, { ...w, watch: true }));
   Object.values(fundBy).forEach(f => add(f.name, { vertical: f.vertical }));
   social.filter(s => s.company).forEach(s => add(s.company, {}));
+  // map X handles to known companies, otherwise track them as new projects
+  const byKey = () => { const m = {}; for (const u of universe.values()) { m[norm(u.name)] = u; if (u.domain) m[norm(rootDomain(u.domain).split(".")[0])] = u; if (u.x) m[norm(u.x)] = u; } return m; };
+  { const idx = byKey(); for (const s of social.filter(s => s.handle)) { const hit = idx[norm(s.handle)] || (s.handleName && idx[norm(s.handleName)]); s.company = hit ? hit.name : (s.handleName && s.handleName.length < 40 ? s.handleName : "@" + s.handle); if (!hit) add(s.company, { x: s.handle }); } }
+  // self growing watchlist: companies surfaced before keep getting checked
+  H.discovered = H.discovered || {};
+  const autoCount = Object.entries(H.discovered).filter(([, d]) => daysSince(d.last) <= 120).map(([k, d]) => { if (!universe.has(k)) add(d.name, { domain: d.domain, x: d.x, auto: true }); return k; }).length;
   // match unnamed social posts (Farcaster, X) to known companies by name in text
   const known = [...universe.values()].filter(u => u.name.length >= 4);
   social.filter(s => !s.company).forEach(s => { const hit = known.find(u => new RegExp(`\\b${u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(s.text)); if (hit) s.company = hit.name; });
@@ -462,6 +581,13 @@ async function main() {
   sources.vc = { ok: vcJobs.length > 0, count: Object.keys(vcByCo).length, notes: vcRep };
   console.log(`VC boards: ${vcJobs.length} engineering roles at ${Object.keys(vcByCo).length} companies`);
 
+  // 3c. crypto job sites
+  const siteRep = [];
+  const siteJobs = await jobSites(cfg.jobSites || [], siteRep);
+  const siteByCo = {};
+  for (const j of siteJobs) { const k = norm(j.company); if (!k) continue; (siteByCo[k] = siteByCo[k] || { name: j.company, jobs: [], sites: new Set() }); siteByCo[k].jobs.push(j); siteByCo[k].sites.add(j.site); }
+  sources.sites = { ok: siteJobs.length > 0, count: Object.keys(siteByCo).length, notes: siteRep };
+
   // 4. job boards
   const list = [...universe.values()];
   let boards = 0, missing = [];
@@ -471,7 +597,7 @@ async function main() {
     boards++; u.ats = { type: b.type, slug: b.slug };
     u.jobs = b.jobs.filter(j => j.title && isEng(j.title));
   });
-  sources.jobs = { ok: true, count: boards, notes: [`${boards} company job boards read`, ...(missing.length ? [`Jobs page not found for: ${missing.sort().join(", ")}. Add a slug in config/watchlist.json if they're hiring.`] : [])] };
+  sources.jobs = { ok: true, count: boards, notes: [`${boards} company job boards read across ${ATS_ORDER.length} systems`, `${autoCount} companies auto added to the watchlist from earlier signals`, ...(missing.length ? [`Jobs page not found for: ${missing.sort().join(", ")}. Add a slug in config/watchlist.json if they're hiring.`] : [])] };
   console.log(`Job boards: ${boards} found, ${missing.length} watchlist companies not found`);
   // add VC portfolio roles (after ATS detection so we don't probe hundreds of new boards)
   for (const [k, v] of Object.entries(vcByCo)) {
@@ -480,6 +606,13 @@ async function main() {
     if (!u.domain && v.domain) u.domain = v.domain;
     u.backers = [...v.backers];
     const have = new Set((u.jobs || []).map(j => j.title.toLowerCase().replace(/[^a-z0-9]/g, "")));
+    for (const j of v.jobs) { const t = j.title.toLowerCase().replace(/[^a-z0-9]/g, ""); if (!have.has(t)) { have.add(t); u.jobs.push(j); } }
+  }
+  for (const [k, v] of Object.entries(siteByCo)) {
+    let u = universe.get(k);
+    if (!u) { u = { name: v.name, jobs: [] }; universe.set(k, u); list.push(u); }
+    u.jobs = u.jobs || []; u.sites = [...v.sites];
+    const have = new Set(u.jobs.map(j => j.title.toLowerCase().replace(/[^a-z0-9]/g, "")));
     for (const j of v.jobs) { const t = j.title.toLowerCase().replace(/[^a-z0-9]/g, ""); if (!have.has(t)) { have.add(t); u.jobs.push(j); } }
   }
 
@@ -515,12 +648,12 @@ async function main() {
       const posted = j.posted && !isNaN(new Date(j.posted)) ? new Date(j.posted).toISOString().slice(0, 10) : null;
       if (!H.roles[id]) H.roles[id] = posted && posted <= TODAY ? posted : TODAY;
       const first = H.roles[id];
-      return { title: j.title.trim(), url: j.url, location: j.location || "", firstSeen: first, age: daysSince(first), disc: discipline(j.title) };
+      return { id, title: j.title.trim(), url: j.url, location: j.location || "", firstSeen: first, age: daysSince(first), disc: discipline(j.title), salary: j.salary || "", via: j.vc || j.site || "" };
     }).sort((a, b) => a.age - b.age);
     const funding = fundBy[k] || null;
     const soc = social.filter(s => s.company && norm(s.company) === k);
     const dev = u.dev || null;
-    if (!roles.length && !funding && !soc.length && !(dev && dev.spike)) continue;
+    if (!roles.length && !funding && !soc.length && !(dev && dev.spike)) { if (H.live && H.live[k] && Object.keys(H.live[k]).length === 0) delete H.live[k]; continue; }
     if (!H.companies[k]) H.companies[k] = TODAY;
     const c = {
       id: k, name: u.name, domain: u.domain || "", vertical: u.vertical || (funding && funding.vertical) || "Infra & data",
@@ -531,6 +664,31 @@ async function main() {
       backers: u.backers || [], dev
     };
     c.stale = roles.some(r => r.age >= 30);
+    c.sites = u.sites || [];
+    // hiring surge: compare with the count about a week ago
+    H.counts = H.counts || {}; const hc = H.counts[k] = H.counts[k] || {};
+    hc[TODAY] = roles.length;
+    for (const d of Object.keys(hc)) if (daysSince(d) > 21) delete hc[d];
+    const weekAgo = Object.entries(hc).filter(([d]) => daysSince(d) >= 6 && daysSince(d) <= 10).sort()[0];
+    if (weekAgo && roles.length - weekAgo[1] >= 3 && roles.length >= 2 * Math.max(1, weekAgo[1])) c.surge = { from: weekAgo[1], to: roles.length };
+    // roles closing: only judged when we can see the company's roles today
+    H.live = H.live || {}; H.closed = H.closed || {};
+    const prevLive = H.live[k] || {};
+    if (roles.length) {
+      const nowIds = new Set(roles.map(r => r.id));
+      for (const [id, [title, first]] of Object.entries(prevLive)) if (!nowIds.has(id)) (H.closed[k] = H.closed[k] || []).push({ title, closed: TODAY, openDays: daysSince(first) });
+      H.live[k] = Object.fromEntries(roles.map(r => [r.id, [r.title, r.firstSeen]]));
+    }
+    if (H.closed[k]) H.closed[k] = H.closed[k].filter(x => daysSince(x.closed) <= 30);
+    c.closed = H.closed[k] || [];
+    c.closing = c.closed.filter(x => daysSince(x.closed) <= 14 && x.openDays <= 21);
+    // location
+    const LB = cfg.locationBoost || {};
+    const locText = roles.map(r => r.location).join(" | ").toLowerCase();
+    const hasAny = arr => (arr || []).some(w => new RegExp(`\\b${w.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(locText));
+    c.loc = hasAny(LB.strong) ? "strong" : hasAny(LB.some) ? "some" : "";
+    // remember companies surfaced outside the watchlist
+    if (!u.watch) H.discovered[k] = { name: u.name, domain: u.domain || "", x: u.x || "", since: (H.discovered[k] && H.discovered[k].since) || TODAY, last: TODAY };
     c.newRoles = roles.filter(r => r.firstSeen === TODAY).length;
     score(c); companies.push(c);
   }
