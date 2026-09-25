@@ -8,14 +8,74 @@
     "https://cointelegraph.com/rss"
   ],
   "fundingLookbackDays": 30,
-  "telegramChannels": ["web3hiring", "cryptojobslist", "remoteweb3jobs"],
-  "farcasterQueries": ["hiring engineer", "we're hiring developer"],
+  "telegramChannels": [
+    "web3hiring",
+    "cryptojobslist",
+    "remoteweb3jobs"
+  ],
+  "farcasterQueries": [
+    "hiring engineer",
+    "we're hiring developer"
+  ],
   "xQueries": [
     "(\"we're hiring\" OR \"we are hiring\" OR \"join our team\") (engineer OR developer) (crypto OR web3 OR defi OR blockchain OR stablecoin) -is:retweet"
   ],
   "apollo": {
-    "titles": ["CTO", "Chief Technology Officer", "VP Engineering", "Head of Engineering", "Engineering Director", "Director of Engineering"],
+    "titles": [
+      "CTO",
+      "Chief Technology Officer",
+      "VP Engineering",
+      "Head of Engineering",
+      "Engineering Director",
+      "Director of Engineering"
+    ],
     "dailyLimit": 8,
     "minScore": 16
+  },
+  "vcBoards": [
+    {
+      "name": "Dragonfly",
+      "url": "https://jobs.dragonfly.xyz"
+    },
+    {
+      "name": "Polychain",
+      "url": "https://jobs.polychain.capital"
+    },
+    {
+      "name": "Multicoin",
+      "url": "https://jobs.multicoin.capital"
+    },
+    {
+      "name": "Placeholder",
+      "url": "https://jobs.placeholder.vc"
+    },
+    {
+      "name": "Variant",
+      "url": "https://variant.getro.com"
+    },
+    {
+      "name": "Paradigm",
+      "url": "https://jobs.paradigm.xyz"
+    },
+    {
+      "name": "Pantera",
+      "url": "https://jobs.panteracapital.com"
+    },
+    {
+      "name": "Electric Capital",
+      "url": "https://jobs.electriccapital.com"
+    },
+    {
+      "name": "Haun Ventures",
+      "url": "https://jobs.haun.co"
+    },
+    {
+      "name": "Framework Ventures",
+      "url": "https://jobs.framework.ventures"
+    }
+  ],
+  "github": {
+    "enabled": true,
+    "maxCompaniesPerDay": 60
   }
 }

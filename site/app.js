@@ -100,10 +100,10 @@ const computeMatches = () => list.forEach(c => c.matches = matchesFor(c));
 // ---------- helpers ----------
 const initials = n => n.replace(/[^A-Za-z0-9 ]/g, "").split(" ").filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || n[0];
 const av = c => `<div class="avatar" style="background:${c.color}">${esc(initials(c.name))}</div>`;
-const what = c => c.roles.length ? c.roles.map(r => r.title).join(", ") : c.funding ? `${fmtM(c.funding.amountM)}, ${c.funding.round}` : (c.social[0] && c.social[0].text) || "";
+const what = c => c.roles.length ? c.roles.map(r => r.title).join(", ") : c.funding ? `${fmtM(c.funding.amountM)}, ${c.funding.round}` : c.social[0] ? c.social[0].text : c.dev ? `${c.dev.contributors} active engineers on GitHub` : "";
 const contactLine = c => c.contact && c.contact.name ? `${c.contact.name}, ${c.contact.title || ""}` : c.contact && c.contact.hidden ? `${c.contact.title || "Decision maker"} (hidden in demo)` : "CTO or Head of Engineering";
 function tags(c) {
-  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.stale ? '<span class="tag t-stale">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
+  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.backers && c.backers.length ? '<span class="tag t-plain">VC backed</span>' : ""}${c.stale ? '<span class="tag t-stale">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
 }
 
 // ---------- start ----------
@@ -111,8 +111,9 @@ function start(d) {
   DATA = d;
   list = d.companies.map(c => Object.assign(c, {
     color: COLORS[[...c.name].reduce((a, ch) => a + ch.charCodeAt(0), 0) % COLORS.length],
-    sig: `r${c.roles.length}f${c.funding ? c.funding.date : ""}s${c.social.length}`,
-    mtext: [c.name, c.vertical, c.roles.map(r => r.title).join(" "), c.disc.map(x => DSYN[x] || "").join(" "), c.funding && c.funding.headline, c.social.map(s => s.text).join(" ")].join(" ").toLowerCase()
+    sig: `r${c.roles.length}f${c.funding ? c.funding.date : ""}s${c.social.length}d${c.dev && c.dev.spike ? 1 : 0}`,
+    backers: c.backers || [], dev: c.dev || null,
+    mtext: [c.name, c.vertical, c.roles.map(r => r.title).join(" "), c.disc.map(x => DSYN[x] || "").join(" "), c.funding && c.funding.headline, c.social.map(s => s.text).join(" "), (c.backers || []).join(" ")].join(" ").toLowerCase()
   }));
   $("lock").remove();
   if (DEMO) {
@@ -191,7 +192,7 @@ document.querySelectorAll("[data-sig]").forEach(b => b.onclick = () => setSig(b.
 $("min").oninput = () => { minS = +$("min").value; $("minv").textContent = minS; render(); };
 $("q").oninput = e => { q = e.target.value.toLowerCase(); if (!$("v-radar").classList.contains("on")) go("radar"); render(); };
 document.querySelectorAll("[data-sort]").forEach(b => b.onclick = () => { sortKey = b.dataset.sort; render(); });
-const EMPTY = { social: "No social signals today. Hiring posts from Telegram, Farcaster and X land here.", match: "No matches yet. Add candidates and every lead gets checked against them.", due: "No follow ups due today.", triage: "Everything's triaged. Nice.", stale: "No stale roles right now.", new: "Nothing new today yet." };
+const EMPTY = { vc: "No VC portfolio roles yet. Check the VC boards card on the Sources page.", dev: "No GitHub spikes today. The check rotates through companies, so more show up over the week.", social: "No social signals today. Hiring posts from Telegram, Farcaster and X land here.", match: "No matches yet. Add candidates and every lead gets checked against them.", due: "No follow ups due today.", triage: "Everything's triaged. Nice.", stale: "No stale roles right now.", new: "Nothing new today yet." };
 function render() {
   if (!DATA) return;
   const order = Object.fromEntries([["", -1], ...STAGES.map((s, i) => [s[0], i])]);
@@ -200,6 +201,7 @@ function render() {
     if (sig === "new" && !c.isNew) return false;
     if (sig === "hiring" && !c.roles.length) return false; if (sig === "funding" && !c.funding) return false;
     if (sig === "social" && !c.social.length) return false; if (sig === "stale" && !c.stale) return false;
+    if (sig === "vc" && !c.backers.length) return false; if (sig === "dev" && !(c.dev && c.dev.spike)) return false;
     if (sig === "match" && !c.matches.length) return false; if (sig === "due" && !isDue(c)) return false;
     if (vert !== "All" && c.vertical !== vert) return false; if (dsc !== "All" && !c.disc.includes(dsc)) return false;
     if (c.score < minS) return false;
@@ -212,7 +214,7 @@ function render() {
     <td><div class="co">${av(c)}<div><b>${esc(c.name)}</b><span>${esc(c.vertical)}${c.locations[0] ? " · " + esc(c.locations[0]) : ""}</span></div></div></td>
     <td><div class="tags">${tags(c)}</div></td>
     <td><span class="score">${c.score}<span class="meter"><i class="${c.tier}" style="width:${c.score * 5}%"></i></span></span></td>
-    <td><div class="role" title="${esc(what(c))}" style="color:var(--ink)">${esc(what(c))}</div><div class="role" style="font-size:12px">${c.disc.length ? esc(c.disc.join(" · ")) : c.funding ? "Roles not live yet" : "From social"}</div></td>
+    <td><div class="role" title="${esc(what(c))}" style="color:var(--ink)">${esc(what(c))}</div><div class="role" style="font-size:12px">${c.disc.length ? esc(c.disc.join(" · ")) : c.funding ? "Roles not live yet" : c.dev && c.dev.spike ? "Team growing on GitHub" : "From social"}</div></td>
     <td><div class="role" style="max-width:220px">${c.contact && (c.contact.name || c.contact.hidden) ? '<span class="tag t-ok" style="margin-right:6px">Apollo</span>' : ""}${esc(contactLine(c))}</div></td>
     <td><select class="status stagesel" data-s="${stage(c)}" data-id="${c.id}" aria-label="Stage for ${esc(c.name)}"><option value="" ${!stage(c) ? "selected" : ""}>Not triaged</option>${STAGES.map(s => `<option value="${s[0]}" ${stage(c) === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}</select></td>
     <td><span class="due ${dueCls(nextOf(c))}">${nextOf(c) ? dueLabel(nextOf(c)) : (snoozed(c) ? "Snoozed" : "")}</span></td></tr>`).join("")
@@ -235,6 +237,8 @@ function drawHTML() {
   const sigs = [];
   if (c.roles.length) sigs.push(`<div class="sig"><div class="ico t-hire">${I.hire}</div><div style="min-width:0"><b>${c.roles.length} open engineering role${c.roles.length > 1 ? "s" : ""}${c.newRoles ? ` · ${c.newRoles} new today` : ""}</b>${c.roles.slice(0, 12).map(r => `<span style="display:block;margin-top:3px"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a> · ${esc(r.location || "Location not listed")} · first seen ${ago(r.age)}${r.age >= 30 ? ' <span class="tag t-stale">Stale</span>' : ""}</span>`).join("")}${c.roles.length > 12 ? `<span>and ${c.roles.length - 12} more</span>` : ""}</div></div>`);
   if (F) sigs.push(`<div class="sig"><div class="ico t-fund">${I.fund}</div><div><b>Raised ${fmtM(F.amountM)} · ${esc(F.round)}</b><span>${esc(F.date)}. ${F.url ? `<a href="${esc(F.url)}" target="_blank" rel="noopener">${esc(F.headline)}</a>` : esc(F.headline)}${F.investors && F.investors.length ? `<br>Investors: ${esc(F.investors.join(", "))}` : ""}</span></div></div>`);
+  if (c.dev && c.dev.spike) sigs.push(`<div class="sig"><div class="ico t-social"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></div><div><b>Engineering team growing on GitHub</b><span>${c.dev.contributors} people committed code in the last 30 days, up from ${c.dev.prevContributors} the month before${c.dev.newRepos ? `, and ${c.dev.newRepos} new public repos in 2 weeks` : ""}. <a href="https://github.com/${esc(c.dev.org)}" target="_blank" rel="noopener">github.com/${esc(c.dev.org)}</a></span></div></div>`);
+  if (c.backers.length) sigs.push(`<div class="sig"><div class="ico t-fund">${I.fund}</div><div><b>Backed by ${esc(c.backers.join(", "))}</b><span>Roles found on ${c.backers.length > 1 ? "their" : "the"} portfolio job board${c.backers.length > 1 ? "s" : ""}.</span></div></div>`);
   c.social.forEach(p => sigs.push(`<div class="sig"><div class="ico t-social">${I.chat}</div><div><b>${esc(p.platform)} · ${esc(p.date)}</b><span><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.text)}</a></span></div></div>`));
   drawer.innerHTML = `
    <div class="dhead">${av(c)}<div style="flex:1;min-width:0"><h3>${esc(c.name)}</h3><p>${esc(c.vertical)}${c.locations.length ? " · " + esc(c.locations.join(", ")) : ""}${c.domain ? ` · <a href="https://${esc(c.domain)}" target="_blank" rel="noopener">${esc(c.domain)}</a>` : ""}</p></div><button class="iconbtn" id="close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -315,8 +319,8 @@ function renderSources() {
     ["Farcaster", "Hiring casts from crypto founders and builders.", "Free tier via Neynar, add NEYNAR_API_KEY", live("farcaster", true), S2.farcaster],
     ["X (Twitter)", "Hiring posts across crypto, matched to companies.", "About $15/mo via TwitterAPI.io, add TWITTERAPI_KEY", live("x", true), S2.x],
     ["Apollo.io", "Finds the CTO or Head of Engineering for new Hot leads, a few a day to save credits.", "Paid plan, add APOLLO_API_KEY", live("apollo", true), S2.apollo],
-    ["VC portfolio job boards", "Multicoin, Polychain, Dragonfly, a16z crypto and more.", "Free, coming next", ["Planned", "t-plain"], null],
-    ["GitHub activity", "Commit and contributor spikes as an early hiring tell.", "Free, coming next", ["Planned", "t-plain"], null]
+    ["VC portfolio job boards", "Every engineering role across Dragonfly, Polychain, Multicoin, Paradigm, Pantera, Variant and more. Edit the list in config/sources.json.", "Free", live("vc"), S2.vc],
+    ["GitHub activity", "Flags companies where more people are committing code than last month, often before roles go public. Checks about 60 companies a day on rotation.", "Free", live("github"), S2.github]
   ];
   $("srcs").innerHTML = cards.map(([t, d, cost, [lab, cls], info]) => `<div class="src"><div class="src-top"><h3>${t}</h3><span class="tag ${cls}">${lab}</span></div><p>${d}</p><div class="cost">${cost}</div>${info && info.notes && info.notes.length ? `<details><summary>Last run details</summary><ul>${info.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}</div>`).join("");
 }

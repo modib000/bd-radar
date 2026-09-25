@@ -12,7 +12,8 @@ const PASS = process.env.RADAR_PASSPHRASE;
 const KEYS = {
   apollo: process.env.APOLLO_API_KEY || "",
   twitter: process.env.TWITTERAPI_KEY || "",
-  neynar: process.env.NEYNAR_API_KEY || ""
+  neynar: process.env.NEYNAR_API_KEY || "",
+  github: process.env.GITHUB_TOKEN || ""
 };
 const DAY = 864e5;
 const NOW = new Date();
@@ -258,6 +259,101 @@ async function xSearch(queries, report) {
   return out;
 }
 
+// ---------- VC portfolio job boards (Getro) ----------
+function findInNext(obj) {
+  let networkId = null; const jobs = [];
+  const walk = (o, d = 0) => {
+    if (!o || typeof o !== "object" || d > 14) return;
+    if (Array.isArray(o)) { for (const x of o) walk(x, d + 1); return; }
+    if (networkId == null && o.network && o.network.id != null) networkId = o.network.id;
+    if (o.title && o.organization && typeof o.organization === "object" && o.organization.name) jobs.push(o);
+    for (const k in o) if (k !== "organization") walk(o[k], d + 1);
+  };
+  walk(obj);
+  return { networkId, jobs };
+}
+const toISO = v => { if (!v) return null; if (typeof v === "number") return new Date(v > 1e12 ? v : v * 1000).toISOString(); const d = new Date(v); return isNaN(d) ? null : d.toISOString(); };
+async function vcBoard(board, report) {
+  const base = board.url.replace(/\/+$/, "").replace(/\/jobs$/, "");
+  let html;
+  try { html = await getText(base + "/jobs"); } catch (e) { report.push(`${board.name}: ${e.message}`); return []; }
+  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  let next = null; try { next = m && JSON.parse(m[1]); } catch {}
+  let { networkId, jobs } = findInNext(next);
+  let paged = false;
+  if (networkId != null) {
+    const all = [];
+    for (let page = 0; page < 40; page++) {
+      try {
+        const j = await getJSON(`https://api.getro.com/api/v2/collections/${networkId}/search/jobs`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json", origin: base, referer: base + "/jobs" },
+          body: JSON.stringify({ hitsPerPage: 100, page, filters: {}, query: "" })
+        });
+        const batch = (j.results && j.results.jobs) || j.jobs || (Array.isArray(j.results) ? j.results : []);
+        all.push(...batch);
+        if (batch.length < 100) break;
+      } catch (e) { if (!all.length) report.push(`${board.name}: search API ${e.message}, using the first page only`); break; }
+    }
+    if (all.length) { jobs = all; paged = true; }
+  }
+  const out = jobs.map(x => {
+    const org = x.organization || {};
+    const locs = Array.isArray(x.locations) ? x.locations.map(l => typeof l === "string" ? l : (l && (l.name || l.label)) || "").filter(Boolean).join("; ") : (x.location || "");
+    const url = x.url && /^https?:/.test(x.url) ? x.url : `${base}/companies/${org.slug || ""}/jobs/${x.slug || ""}`;
+    return { company: String(org.name).trim(), domain: (org.domain || "").replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, ""), title: String(x.title).trim(), url, location: locs, posted: toISO(x.created_at || x.createdAt || x.posted_at), vc: board.name };
+  }).filter(j => j.company && isEng(j.title) && !/talent network|talent collective|general application|open application/i.test(j.title) && norm(j.company) !== norm(board.name));
+  report.push(`${board.name}: ${jobs.length} jobs read${paged ? "" : " (first page only)"}, ${out.length} engineering`);
+  return out;
+}
+
+// ---------- GitHub activity ----------
+let ghCalls = 0;
+async function gh(path) {
+  if (ghCalls >= 900) throw new Error("daily GitHub budget used");
+  ghCalls++;
+  const headers = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  if (KEYS.github) headers.Authorization = `Bearer ${KEYS.github}`;
+  const r = await get(`https://api.github.com${path}`, { headers }, 1);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+const rootDomain = d => String(d || "").toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+async function findGithubOrg(u, cache) {
+  const hit = cache[u.name];
+  if (hit && hit.org) return hit.org;
+  if (hit && hit.none && daysSince(hit.none) < 30 && !u.github) return null;
+  const guesses = [...new Set([u.github, ...slugGuesses(u), u.domain && rootDomain(u.domain).split(".")[0]].filter(Boolean))].slice(0, 4);
+  for (const g of guesses) {
+    const o = await gh(`/orgs/${encodeURIComponent(g)}`).catch(() => null);
+    if (!o) continue;
+    const blog = rootDomain(o.blog), dom = rootDomain(u.domain);
+    const ok = (u.github && g === u.github) || (dom && blog && (blog.endsWith(dom) || dom.endsWith(blog))) || (!dom && norm(o.name || o.login) === norm(u.name));
+    if (ok) { cache[u.name] = { org: o.login }; return o.login; }
+  }
+  cache[u.name] = { none: TODAY };
+  return null;
+}
+async function devActivity(org) {
+  const repos = (await gh(`/orgs/${org}/repos?sort=pushed&per_page=8&type=public`) || []).filter(r => !r.fork && !r.archived).slice(0, 3);
+  const since = new Date(NOW - 60 * DAY).toISOString(), cut = NOW - 30 * DAY;
+  const recent = new Set(), prior = new Set(); let commits = 0;
+  for (const r of repos) {
+    const cs = await gh(`/repos/${org}/${r.name}/commits?since=${since}&per_page=100`) || [];
+    for (const c of cs) {
+      const who = (c.author && c.author.login) || (c.commit && c.commit.author && c.commit.author.email);
+      if (!who || /\[bot\]|dependabot|github-actions/i.test(who)) continue;
+      const t = new Date(c.commit && c.commit.author && c.commit.author.date);
+      if (t >= cut) { recent.add(who); commits++; } else prior.add(who);
+    }
+  }
+  const newRepos = (await gh(`/orgs/${org}/repos?sort=created&per_page=10&type=public`) || []).filter(r => !r.fork && daysSince(r.created_at) <= 14).length;
+  const a = recent.size, b = prior.size;
+  const spike = (a - b >= 3 && a >= b * 1.3) || (b === 0 && a >= 5) || newRepos >= 3;
+  return { org, contributors: a, prevContributors: b, commits, newRepos, repos: repos.map(r => r.name), spike, checked: TODAY };
+}
+
 // ---------- Apollo ----------
 async function apolloContact(domain, titles) {
   const r = await get("https://api.apollo.io/api/v1/mixed_people/search", {
@@ -290,10 +386,12 @@ function score(c) {
     if (daysSince(c.funding.date) <= 14) parts.push([2, "Raise in the last 2 weeks"]);
   }
   if (c.social.length) parts.push([2, `Hiring posts on ${[...new Set(c.social.map(s => s.platform))].join(" and ")}`]);
+  if (c.backers && c.backers.length) parts.push([2, `Backed by ${c.backers.slice(0, 3).join(", ")}`]);
+  if (c.dev && c.dev.spike) parts.push([2, "Engineering activity growing on GitHub"]);
   if (c.contact && c.contact.name) parts.push([2, "Decision maker found"]);
   const vf = VFIT[c.vertical] || 1;
   parts.push([vf, `${c.vertical} is ${vf === 3 ? "engineering heavy" : vf === 2 ? "moderately engineering heavy" : "lighter on engineering"}`]);
-  const types = (roles.length ? 1 : 0) + (c.funding ? 1 : 0) + (c.social.length ? 1 : 0);
+  const types = (roles.length ? 1 : 0) + (c.funding ? 1 : 0) + (c.social.length ? 1 : 0) + (c.dev && c.dev.spike ? 1 : 0);
   if (types >= 2) parts.push([3, "Several signals at once"]);
   c.parts = parts;
   c.score = Math.min(20, parts.reduce((a, p) => a + p[0], 0));
@@ -304,6 +402,8 @@ function story(c) {
   if (R.length) { const newest = Math.min(...R.map(r => r.age)); bits.push(`${R.length} open engineering role${R.length > 1 ? "s" : ""} (${c.disc.join(", ")}), newest posted ${newest === 0 ? "today" : newest === 1 ? "yesterday" : newest + " days ago"}.`); }
   if (F) bits.push(`Raised ${F.amountM ? "$" + (+F.amountM.toFixed(1)) + "m" : "an undisclosed amount"} (${F.round}) on ${F.date}.`);
   if (c.social.length) bits.push(`Hiring posts on ${[...new Set(c.social.map(s => s.platform))].join(" and ")}.`);
+  if (c.dev && c.dev.spike) bits.push(`${c.dev.contributors} people committing code in the last 30 days, up from ${c.dev.prevContributors}${c.dev.newRepos ? `, plus ${c.dev.newRepos} new repos` : ""}.`);
+  if (c.backers && c.backers.length) bits.push(`Backed by ${c.backers.join(", ")}.`);
   c.why = bits.join(" ");
   const stale = R.filter(r => r.age >= 30).sort((a, b) => b.age - a.age)[0];
   if (stale) c.angle = `Their ${stale.title} role has been open ${stale.age} days. Lead with one or two candidates you could put forward this week rather than a generic pitch.`;
@@ -311,6 +411,7 @@ function story(c) {
   else if (F) c.angle = `Just raised. Engineering hiring usually follows within weeks, so get in before the roles go public and help shape the first hires.`;
   else if (R.length >= 3) c.angle = `Hiring across ${c.disc.join(", ")} at once. Pitch one specialist partner for the whole engineering push instead of role by role.`;
   else if (R.length) c.angle = `Open with a relevant candidate for the ${R[0].title} role and use it to start the wider conversation.`;
+  else if (c.dev && c.dev.spike) c.angle = `Their engineering team is visibly growing on GitHub but the roles aren't public yet. Reach out early and offer to help them scale before they post.`;
   else c.angle = `Hiring chatter on social. Worth a light touch message to find out what's coming.`;
 }
 
@@ -349,6 +450,18 @@ async function main() {
   const known = [...universe.values()].filter(u => u.name.length >= 4);
   social.filter(s => !s.company).forEach(s => { const hit = known.find(u => new RegExp(`\\b${u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(s.text)); if (hit) s.company = hit.name; });
 
+  // 3b. VC portfolio job boards
+  const vcRep = [];
+  const vcJobs = (await pool(cfg.vcBoards || [], 3, b => vcBoard(b, vcRep))).flat();
+  const vcByCo = {};
+  for (const j of vcJobs) {
+    const k = norm(j.company); if (!k) continue;
+    (vcByCo[k] = vcByCo[k] || { name: j.company, domain: j.domain, jobs: [], backers: new Set() });
+    vcByCo[k].jobs.push(j); vcByCo[k].backers.add(j.vc);
+  }
+  sources.vc = { ok: vcJobs.length > 0, count: Object.keys(vcByCo).length, notes: vcRep };
+  console.log(`VC boards: ${vcJobs.length} engineering roles at ${Object.keys(vcByCo).length} companies`);
+
   // 4. job boards
   const list = [...universe.values()];
   let boards = 0, missing = [];
@@ -360,9 +473,40 @@ async function main() {
   });
   sources.jobs = { ok: true, count: boards, notes: [`${boards} company job boards read`, ...(missing.length ? [`Jobs page not found for: ${missing.sort().join(", ")}. Add a slug in config/watchlist.json if they're hiring.`] : [])] };
   console.log(`Job boards: ${boards} found, ${missing.length} watchlist companies not found`);
+  // add VC portfolio roles (after ATS detection so we don't probe hundreds of new boards)
+  for (const [k, v] of Object.entries(vcByCo)) {
+    let u = universe.get(k);
+    if (!u) { u = { name: v.name, domain: v.domain, jobs: [], fromVC: true }; universe.set(k, u); list.push(u); }
+    if (!u.domain && v.domain) u.domain = v.domain;
+    u.backers = [...v.backers];
+    const have = new Set((u.jobs || []).map(j => j.title.toLowerCase().replace(/[^a-z0-9]/g, "")));
+    for (const j of v.jobs) { const t = j.title.toLowerCase().replace(/[^a-z0-9]/g, ""); if (!have.has(t)) { have.add(t); u.jobs.push(j); } }
+  }
+
+  // 4b. GitHub activity (rotates through companies, a slice per day)
+  const prevByName = Object.fromEntries((prev.companies || []).map(c => [norm(c.name), c]));
+  H.gh = H.gh || {}; H.ghChecked = H.ghChecked || {};
+  const ghCfg = cfg.github || {};
+  const ghRep = []; let ghDone = 0, spikes = 0;
+  if (ghCfg.enabled !== false) {
+    const cands = list.filter(u => u.watch || u.github || (u.jobs && u.jobs.length) || fundBy[norm(u.name)])
+      .sort((a, b) => (H.ghChecked[norm(a.name)] || "").localeCompare(H.ghChecked[norm(b.name)] || "") || (b.watch - a.watch))
+      .slice(0, ghCfg.maxCompaniesPerDay || 60);
+    for (const u of cands) {
+      const k = norm(u.name);
+      try {
+        const org = await findGithubOrg(u, H.gh);
+        H.ghChecked[k] = TODAY;
+        if (!org) continue;
+        u.dev = await devActivity(org); ghDone++; if (u.dev.spike) spikes++;
+      } catch (e) { ghRep.push(`Stopped early: ${e.message}`); break; }
+    }
+    for (const u of list) if (!u.dev && prevByName[norm(u.name)] && prevByName[norm(u.name)].dev) u.dev = prevByName[norm(u.name)].dev;
+    ghRep.unshift(`Checked ${ghDone} GitHub orgs today (${ghCalls} API calls), ${spikes} growing${KEYS.github ? "" : ". No GITHUB_TOKEN, so only a few checks fit in the free limit"}`);
+  }
+  sources.github = { ok: ghCfg.enabled !== false, count: list.filter(u => u.dev && u.dev.spike).length, notes: ghRep };
 
   // 5. build companies
-  const prevByName = Object.fromEntries((prev.companies || []).map(c => [norm(c.name), c]));
   const companies = [];
   for (const u of list) {
     const k = norm(u.name);
@@ -375,14 +519,16 @@ async function main() {
     }).sort((a, b) => a.age - b.age);
     const funding = fundBy[k] || null;
     const soc = social.filter(s => s.company && norm(s.company) === k);
-    if (!roles.length && !funding && !soc.length) continue;
+    const dev = u.dev || null;
+    if (!roles.length && !funding && !soc.length && !(dev && dev.spike)) continue;
     if (!H.companies[k]) H.companies[k] = TODAY;
     const c = {
       id: k, name: u.name, domain: u.domain || "", vertical: u.vertical || (funding && funding.vertical) || "Infra & data",
       locations: [...new Set(roles.map(r => r.location).filter(Boolean))].slice(0, 3),
       roles, disc: [...new Set(roles.flatMap(r => r.disc))], funding, social: soc,
       contact: (prevByName[k] && prevByName[k].contact) || null,
-      firstSeen: H.companies[k], isNew: H.companies[k] === TODAY, watch: !!u.watch, ats: u.ats || null
+      firstSeen: H.companies[k], isNew: H.companies[k] === TODAY, watch: !!u.watch, ats: u.ats || null,
+      backers: u.backers || [], dev
     };
     c.stale = roles.some(r => r.age >= 30);
     c.newRoles = roles.filter(r => r.firstSeen === TODAY).length;
