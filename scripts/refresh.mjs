@@ -254,9 +254,46 @@ async function fundingFromNews(feeds, lookback, report) {
   });
   return out;
 }
+// ---------- market overview ----------
+let RAW_RAISES = [];
+const dayKey = ms => new Date(ms).toISOString().slice(0, 10);
+const lastN = (arr, n = 400) => arr.slice(-n);
+async function marketData(H, companies, report) {
+  const series = {}, src = {};
+  const tryGet = async (name, fn) => { try { const v = await fn(); if (v && v.length) { series[name] = lastN(v); src[name] = "ok"; } else src[name] = "empty"; } catch (e) { src[name] = e.message; report.push(`${name}: ${e.message}`); } };
+  await tryGet("tvl", async () => (await getJSON("https://api.llama.fi/v2/historicalChainTvl")).map(x => [dayKey(x.date * 1000), Math.round(x.tvl)]));
+  await tryGet("stables", async () => (await getJSON("https://stablecoins.llama.fi/stablecoincharts/all")).map(x => [dayKey(+x.date * 1000), Math.round((x.totalCirculatingUSD && x.totalCirculatingUSD.peggedUSD) || 0)]).filter(x => x[1] > 0));
+  await tryGet("dex", async () => ((await getJSON("https://api.llama.fi/overview/dexs?excludeTotalDataChart=false&excludeTotalDataChartBreakdown=true&dataType=dailyVolume")).totalDataChart || []).map(x => [dayKey(x[0] * 1000), Math.round(x[1])]));
+  for (const [name, id] of [["btc", "bitcoin"], ["eth", "ethereum"], ["sol", "solana"]]) {
+    await tryGet(name, async () => { const j = await getJSON(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=365&interval=daily`); const m = new Map(); for (const [t, v] of j.prices || []) m.set(dayKey(t), Math.round(v)); return [...m.entries()]; });
+    await sleep(1500);
+  }
+  // our own hiring index, built up day by day
+  H.mkt = H.mkt || { roles: {}, cos: {}, raisedN: {}, raisedUSD: {} };
+  H.mkt.roles[TODAY] = companies.reduce((a, c) => a + c.roles.length, 0);
+  H.mkt.cos[TODAY] = companies.filter(c => c.roles.length).length;
+  for (const k of ["roles", "cos"]) for (const d of Object.keys(H.mkt[k])) if (daysSince(d) > 400) delete H.mkt[k][d];
+  series.roles = Object.entries(H.mkt.roles).sort();
+  series.cos = Object.entries(H.mkt.cos).sort();
+  // capital raised per week (DeFiLlama raises, crypto wide)
+  if (RAW_RAISES.length) {
+    const wk = {}, wn = {};
+    for (const r of RAW_RAISES) {
+      if ((NOW / 1000 - r.date) / 86400 > 400) continue;
+      const d = new Date(r.date * 1000); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); const k = dayKey(d.getTime());
+      wk[k] = (wk[k] || 0) + (r.amount || 0); wn[k] = (wn[k] || 0) + 1;
+    }
+    series.raised = Object.entries(wk).sort().map(([k, v]) => [k, Math.round(v * 10) / 10]);
+    series.raisedN = Object.entries(wn).sort();
+  }
+  report.unshift(`Market data: ${Object.keys(series).length} series updated`);
+  return { updated: NOW.toISOString(), series, src };
+}
+
 async function fundingFromDefiLlama(lookback, report) {
   try {
     const j = await getJSON("https://api.llama.fi/raises");
+    RAW_RAISES = j.raises || [];
     const out = (j.raises || []).filter(r => (NOW / 1000 - r.date) / 86400 <= lookback).map(r => ({
       name: r.name, amountM: r.amount || 0, round: r.round || "Undisclosed round", date: new Date(r.date * 1000).toISOString().slice(0, 10),
       url: r.source || "", headline: `${r.name} raised ${r.amount ? "$" + r.amount + "m" : "an undisclosed amount"}${r.round ? " (" + r.round + ")" : ""}`,
@@ -711,12 +748,16 @@ async function main() {
   // prune history older than 120 days
   for (const [k, v] of Object.entries(H.roles)) if (daysSince(v) > 120) delete H.roles[k];
 
-  const payload = { generatedAt: NOW.toISOString(), date: TODAY, companies, sources, history: H };
+  const mkRep = [];
+  const market = await marketData(H, companies, mkRep);
+  sources.market = { ok: Object.keys(market.series).length > 2, count: Object.keys(market.series).length, notes: mkRep };
+  const payload = { generatedAt: NOW.toISOString(), date: TODAY, companies, sources, market, history: H };
   await mkdir(new URL("data/", ROOT), { recursive: true });
   await writeFile(DATA_FILE, JSON.stringify(await encrypt(payload)));
   // Public demo for your CV: same leads, contact details removed, no history.
   const demo = {
     generatedAt: payload.generatedAt, date: TODAY, demo: true,
+    market,
     companies: companies.map(c => ({ ...c, contact: c.contact && c.contact.name ? { name: "", title: c.contact.title || "", hidden: true } : null })),
     sources: Object.fromEntries(Object.entries(sources).map(([k, v]) => [k, { ok: v.ok, count: v.count, notes: [] }]))
   };

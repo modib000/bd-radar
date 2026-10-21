@@ -22,8 +22,7 @@ const ago = n => n === 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`;
 const fmtM = a => a >= 1 ? `$${+a.toFixed(1)}m` : a ? `$${Math.round(a*1000)}k` : "Undisclosed";
 
 // ---------- theme ----------
-let theme = store.get("bdr-theme", null); if (theme) document.documentElement.dataset.theme = theme;
-$("theme").onclick = () => { const cur = document.documentElement.dataset.theme; const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; theme = dark ? "light" : "dark"; document.documentElement.dataset.theme = theme; store.set("bdr-theme", theme); };
+// always dark
 
 // ---------- unlock ----------
 const u8 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -73,9 +72,27 @@ const untriaged = c => !stage(c) && !snoozed(c);
 const nextOf = c => ACTIVE.includes(stage(c)) ? st(c).next || "" : "";
 const isDue = c => { const n = nextOf(c); return n && dayDiff(n) <= 0; };
 function setState(c, patch) { S[c.name] = Object.assign({}, S[c.name], patch); save(); refresh(); }
+let CAD = store.get(PFX + "cad", [3, 7, 14]);
+function nextAction(c) {
+  const s = stage(c), t = st(c), fu = t.fu || 0;
+  if (s === "todo") return ["Send first message", "var(--sky)"];
+  if (s === "contacted") return fu >= 3 ? ["No reply, close or pass", "var(--muted)"] : [["Follow up 1", "Follow up 2", "Final nudge"][fu], fu >= 1 ? "var(--coral)" : "var(--amber)"];
+  if (s === "replied") return ["Book a meeting", "var(--mint)"];
+  if (s === "meeting") return ["Send spec or proposal", "var(--violet)"];
+  if (s === "client") return ["Send candidates", "var(--mint)"];
+  return null;
+}
+function logAction(c) {
+  const s = stage(c), t = st(c), fu = t.fu || 0;
+  if (s === "todo") return setState(c, { stage: "contacted", fu: 0, contacted: addDays(0), next: addDays(CAD[0]) });
+  if (s === "contacted") { const n = fu + 1; return setState(c, { fu: n, next: n < 3 ? addDays(Math.max(1, CAD[n] - CAD[n - 1])) : "" }); }
+  if (s === "replied") return setState(c, { stage: "meeting", next: addDays(2) });
+  if (s === "meeting") return setState(c, { next: addDays(5) });
+  if (s === "client") return setState(c, { next: addDays(14) });
+}
 function setStage(c, s) {
   const p = { stage: s };
-  if (s === "contacted" && !st(c).next) p.next = addDays(3);
+  if (s === "contacted" && !st(c).next) { p.next = addDays(CAD[0]); p.fu = 0; }
   if (s === "todo" && !st(c).next) p.next = addDays(0);
   if (s === "pass") p.passSig = c.sig;
   if (s === "") p.next = "";
@@ -87,8 +104,18 @@ const dueCls = n => { if (!n) return ""; const d = dayDiff(n); return d < 0 ? "o
 
 // ---------- matching ----------
 const skillRe = s => new RegExp("(^|[^a-z0-9])" + s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z0-9]|$)");
+function boolMatch(q, text) {
+  const toks = q.match(/\(|\)|"[^"]+"|[^\s()]+/g) || []; let i = 0;
+  const term = () => { const t = toks[i++]; if (t === "(") { const v = orE(); i++; return v; } if (!t) return true; const w = t.replace(/"/g, "").toLowerCase(); return skillRe(w).test(text); };
+  const notE = () => { if ((toks[i] || "").toUpperCase() === "NOT") { i++; return !notE(); } return term(); };
+  const andE = () => { let v = notE(); while (i < toks.length && toks[i] !== ")" && (toks[i] || "").toUpperCase() !== "OR") { if (toks[i].toUpperCase() === "AND") i++; if ((toks[i] || "").toUpperCase() === "NOT") { i++; v = !notE() && v; } else v = notE() && v; } return v; };
+  const orE = () => { let v = andE(); while ((toks[i] || "").toUpperCase() === "OR") { i++; v = andE() || v; } return v; };
+  try { return orE(); } catch (e) { return false; }
+}
+const isBool = q => /\b(AND|OR|NOT)\b|[()]/.test(q || "");
 function matchesFor(c) {
   return CANDS.map(k => {
+    if (isBool(k.bool)) { if (!boolMatch(k.bool, c.mtext)) return null; const s = (k.bool.match(/"[^"]+"|[A-Za-z0-9.#+-]+/g) || []).map(w => w.replace(/"/g, "").toLowerCase()).filter(w => !/^(and|or|not)$/.test(w) && skillRe(w).test(c.mtext)); return { k, s, score: s.length + 3 }; }
     const s = k.skills.filter(x => x && skillRe(x).test(c.mtext));
     const focus = s.some(x => DWORDS.has(x));
     const ok = s.length >= 3 || (s.length >= 2 && focus);
@@ -103,7 +130,7 @@ const av = c => `<div class="avatar" style="background:${c.color}">${esc(initial
 const what = c => c.roles.length ? c.roles.map(r => r.title).join(", ") : c.funding ? `${fmtM(c.funding.amountM)}, ${c.funding.round}` : c.social[0] ? c.social[0].text : c.dev ? `${c.dev.contributors} active engineers on GitHub` : "";
 const contactLine = c => c.contact && c.contact.name ? `${c.contact.name}, ${c.contact.title || ""}` : c.contact && c.contact.hidden ? `${c.contact.title || "Decision maker"} (hidden in demo)` : "CTO or Head of Engineering";
 function tags(c) {
-  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.surge ? '<span class="tag t-p1">Surge</span>' : ""}${c.social.some(x => x.via) ? '<span class="tag t-social">Flagged on X</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.closing.length >= 2 ? '<span class="tag t-plain">Closing fast</span>' : ""}${c.backers && c.backers.length ? '<span class="tag t-plain">VC backed</span>' : ""}${c.stale ? '<span class="tag t-stale">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
+  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.surge ? `<span class="tag t-surge" data-tip="Roles jumped from ${c.surge.from} to ${c.surge.to} in a week.">Surge</span>` : ""}${c.social.some(x => x.via) ? '<span class="tag t-social">Flagged on X</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.closing.length >= 2 ? '<span class="tag t-plain">Closing fast</span>' : ""}${c.backers && c.backers.length ? `<span class="tag t-plain" data-tip="Roles found on the ${esc(c.backers.join(", "))} portfolio job board.">VC backed</span>` : ""}${c.stale ? '<span class="tag t-stale" data-tip="A role has been open 30+ days or was reposted.">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
 }
 
 // ---------- start ----------
@@ -121,10 +148,14 @@ function start(d) {
   }
   document.querySelector(".app").hidden = false;
   const hr = new Date().getHours();
-  $("greet").textContent = DEMO ? "BD Radar demo" : (hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening") + ", Mo";
+  $("brandName").textContent = DEMO ? "BD Radar (Demo)" : "BD Radar";
+  document.title = DEMO ? "BD Radar (Demo)" : "BD Radar";
+  $("stamp").textContent = new Date(d.generatedAt).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  setupRanges();
   const gen = new Date(d.generatedAt);
   const fresh = (Date.now() - gen) / DAY < 1.5;
-  $("rail-foot").innerHTML = DEMO ? `<b><span class="dot ${fresh ? "live" : ""}"></span>Demo</b>Live leads from ${gen.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}. Contact details hidden. Your clicks stay in your browser.` : `<b><span class="dot ${fresh ? "live" : ""}"></span>${fresh ? "Live" : "Refresh overdue"}</b>Updated ${gen.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} at ${gen.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}. Refreshes every morning.`;
+  const credit = `<div class="credit" style="margin-top:.6rem">Built by <b>Mo Dib</b></div>`;
+  $("rail-foot").innerHTML = (DEMO ? `<b><span class="dot ${fresh ? "live" : ""}"></span>Demo</b>Live leads from ${gen.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}. Contact details hidden. Your clicks stay in your browser.` : `<b><span class="dot ${fresh ? "live" : ""}"></span>${fresh ? "Live" : "Refresh overdue"}</b>Updated ${gen.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} at ${gen.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}. Refreshes every morning.`) + credit;
   setupFilters();
   renderSources();
   refresh();
@@ -132,22 +163,18 @@ function start(d) {
 
 // ---------- overview ----------
 function renderOverview() {
-  const tri = list.filter(untriaged).length, due = list.filter(isDue).length, stale = list.filter(c => c.stale).length, mt = list.filter(c => c.matches.length).length, hot = list.filter(c => c.tier === "hot").length, nw = list.filter(c => c.isNew).length;
-  $("subline").textContent = `${list.length} companies on the radar, ${nw} new today. ${hot} hot, ${tri} waiting to be triaged and ${due} follow up${due === 1 ? "" : "s"} due.`;
-  const max = Math.max(...TIERS.map(t => list.filter(c => c.tier === t[0]).length), 1);
-  $("tiers").innerHTML = TIERS.map(([k, l, sub]) => {
-    const cs = list.filter(c => c.tier === k);
-    const h = cs.filter(c => c.roles.length && !c.funding).length, f = cs.filter(c => c.funding && !c.roles.length).length, b = cs.filter(c => c.roles.length && c.funding).length, s = cs.length - h - f - b;
-    const w = n => `${n / max * 100}%`;
-    return `<div class="tier"><div class="nm"><b>${l}</b><span>${sub}</span></div><div class="stack" title="${h} hiring, ${f} raised, ${b} both${s ? ", " + s + " social only" : ""}">${h ? `<i class="seg-h" style="width:${w(h)}"></i>` : ""}${b ? `<i class="seg-b" style="width:${w(b)}"></i>` : ""}${f ? `<i class="seg-f" style="width:${w(f)}"></i>` : ""}${s ? `<i class="seg-s" style="width:${w(s)}"></i>` : ""}</div><div class="ct">${cs.length}</div></div>`;
-  }).join("");
-  $("tiles").innerHTML = [["triage", tri, "To triage"], ["due", due, "Follow ups due", due > 0], ["stale", stale, "Stale roles"], ["match", mt, CANDS.length ? "Candidate matches" : "Add candidates"]]
-    .map(([k, n, l, al]) => `<button class="tile ${al ? "alert" : ""}" data-go="${k}"><b>${CANDS.length || k !== "match" ? n : "+"}</b><span>${l}</span></button>`).join("");
+  const tri = list.filter(untriaged).length;
+  const cnt = k => list.filter(c => c.tier === k).length;
+  $("leadTotal").textContent = `${list.length} on the radar`;
+  $("leads").innerHTML = [["hot", "Hot", "var(--coral)", "Score 16 to 20. Strongest leads, call these first."], ["strong", "Strong", "var(--amber)", "Score 12 to 15. Worth a message this week."], ["watch", "Watch", "var(--faint)", "Score 11 or under. Early signals, keep an eye on them."]]
+    .map(([k, l, col, tip]) => `<button class="lead" data-tier="${k}" style="--c:${col}" aria-pressed="${sig === k}"><i class="g"></i><div class="lt"><b>${l}</b><span>${tip}</span></div><div class="ln">${cnt(k)}</div></button>`).join("");
+  const h = list.filter(c => c.roles.length && !c.funding).length, f = list.filter(c => c.funding && !c.roles.length).length, b = list.filter(c => c.roles.length && c.funding).length, o = Math.max(0, list.length - h - f - b);
+  $("mix").innerHTML = [[h, "var(--mint)"], [f, "var(--amber)"], [b, "var(--coral)"], [o, "var(--violet)"]].filter(x => x[0]).map(([n, col]) => `<i style="flex:${n};background:${col}"></i>`).join("");
   $("c-radar").textContent = tri || "";
   $("c-pipe").textContent = list.filter(c => ACTIVE.includes(stage(c))).length || "";
   $("c-cand").textContent = CANDS.length || "";
 }
-$("tiles").addEventListener("click", e => { const t = e.target.closest("[data-go]"); if (!t) return; if (t.dataset.go === "match" && !CANDS.length) { go("candidates"); return; } setSig(t.dataset.go); document.querySelector(".bar-filters").scrollIntoView({ behavior: "smooth", block: "start" }); });
+$("leads").addEventListener("click", e => { const t = e.target.closest("[data-tier]"); if (!t) return; setSig(sig === t.dataset.tier ? "all" : t.dataset.tier); renderOverview(); document.querySelector(".bar-filters").scrollIntoView({ behavior: "smooth", block: "start" }); });
 
 // ---------- today queue ----------
 let tab = "triage";
@@ -180,7 +207,7 @@ $("seeall").onclick = () => { setSig(tab === "triage" ? "triage" : "due"); docum
 let sig = "all", vert = "All", dsc = "All", minS = 0, q = "", sortKey = "score", selected = null, verts = [], DISC = [];
 function setupFilters() {
   verts = ["All", ...[...new Set(list.map(c => c.vertical))].sort()];
-  $("vert").innerHTML = verts.map(v => `<option>${v === "All" ? "All verticals" : esc(v)}</option>`).join("");
+  $("vert").innerHTML = verts.map(v => `<option>${v === "All" ? "All sectors" : esc(v)}</option>`).join("");
   $("vert").onchange = () => { vert = verts[$("vert").selectedIndex]; render(); };
   DISC = ["All", ...DISCS.filter(d => list.some(c => c.disc.includes(d)))];
   $("disc").innerHTML = DISC.map(d => `<option>${d === "All" ? "All disciplines" : d === "Software" ? "General software" : d}</option>`).join("");
@@ -188,7 +215,7 @@ function setupFilters() {
 }
 function setSig(s) { sig = s; document.querySelectorAll("[data-sig]").forEach(x => x.setAttribute("aria-pressed", x.dataset.sig === s)); render(); }
 document.querySelectorAll("[data-sig]").forEach(b => b.onclick = () => setSig(b.dataset.sig));
-$("min").oninput = () => { minS = +$("min").value; $("minv").textContent = minS; render(); };
+
 $("q").oninput = e => { q = e.target.value.toLowerCase(); if (!$("v-radar").classList.contains("on")) go("radar"); render(); };
 document.querySelectorAll("[data-sort]").forEach(b => b.onclick = () => { sortKey = b.dataset.sort; render(); });
 const EMPTY = { surge: "No hiring surges this week. They need a week of history, so they start showing after 7 days of runs.", ukeu: "No UK or European roles in the current list.", vc: "No VC portfolio roles yet. Check the VC boards card on the Sources page.", dev: "No GitHub spikes today. The check rotates through companies, so more show up over the week.", social: "No social signals today. Hiring posts from Telegram, Farcaster and X land here.", match: "No matches yet. Add candidates and every lead gets checked against them.", due: "No follow ups due today.", triage: "Everything's triaged. Nice.", stale: "No stale roles right now.", new: "Nothing new today yet." };
@@ -196,7 +223,7 @@ function render() {
   if (!DATA) return;
   const order = Object.fromEntries([["", -1], ...STAGES.map((s, i) => [s[0], i])]);
   let r = list.filter(c => {
-    if (sig === "triage" && !untriaged(c)) return false; if (sig === "hot" && c.tier !== "hot") return false;
+    if (sig === "triage" && !untriaged(c)) return false; if (["hot", "strong", "watch"].includes(sig) && c.tier !== sig) return false;
     if (sig === "new" && !c.isNew) return false;
     if (sig === "hiring" && !c.roles.length) return false; if (sig === "funding" && !c.funding) return false;
     if (sig === "social" && !c.social.length) return false; if (sig === "stale" && !c.stale) return false;
@@ -214,9 +241,9 @@ function render() {
     <td><div class="co">${av(c)}<div><b>${esc(c.name)}</b><span>${esc(c.vertical)}${c.locations[0] ? " · " + esc(c.locations[0]) : ""}</span></div></div></td>
     <td><div class="tags">${tags(c)}</div></td>
     <td><span class="score">${c.score}<span class="meter"><i class="${c.tier}" style="width:${c.score * 5}%"></i></span></span></td>
-    <td><div class="role" title="${esc(what(c))}" style="color:var(--ink)">${esc(what(c))}</div><div class="role" style="font-size:12px">${c.disc.length ? esc(c.disc.join(" · ")) : c.funding ? "Roles not live yet" : c.dev && c.dev.spike ? "Team growing on GitHub" : "From social"}</div></td>
+    <td><div class="role" title="${esc(what(c))}" style="color:var(--ink)">${esc(what(c))}</div><div class="role" style="font-size:.7rem">${c.disc.length ? esc(c.disc.join(" · ")) : c.funding ? "Roles not live yet" : c.dev && c.dev.spike ? "Team growing on GitHub" : "From social"}</div></td>
     <td><div class="role" style="max-width:220px">${c.contact && (c.contact.name || c.contact.hidden) ? '<span class="tag t-ok" style="margin-right:6px">Apollo</span>' : ""}${esc(contactLine(c))}</div></td>
-    <td><select class="status stagesel" data-s="${stage(c)}" data-id="${c.id}" aria-label="Stage for ${esc(c.name)}"><option value="" ${!stage(c) ? "selected" : ""}>Not triaged</option>${STAGES.map(s => `<option value="${s[0]}" ${stage(c) === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}</select></td>
+    <td>${(() => { const a = ACTIVE.includes(stage(c)) && nextAction(c); return a ? `<div class="due" style="color:${a[1]};margin-bottom:.25rem">${a[0]}</div>` : ""; })()}<select class="status stagesel" data-s="${stage(c)}" data-id="${c.id}" aria-label="Stage for ${esc(c.name)}"><option value="" ${!stage(c) ? "selected" : ""}>Not triaged</option>${STAGES.map(s => `<option value="${s[0]}" ${stage(c) === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}</select></td>
     <td><span class="due ${dueCls(nextOf(c))}">${nextOf(c) ? dueLabel(nextOf(c)) : (snoozed(c) ? "Snoozed" : "")}</span></td></tr>`).join("")
     + (r.length > 300 ? `<tr><td colspan="7"><div class="empty">Showing the top 300 of ${r.length}. Narrow the filters to see the rest.</div></td></tr>` : "")
     : `<tr><td colspan="7"><div class="empty">${EMPTY[sig] || "No companies match these filters. Lower the minimum score or clear the search."}</div></td></tr>`;
@@ -275,7 +302,7 @@ function renderBoard() {
   const b = $("board"); b.style.gridTemplateColumns = `repeat(${STAGES.length},minmax(160px,1fr))`;
   b.innerHTML = STAGES.map(([k, l]) => {
     const cs = list.filter(c => stage(c) === k).sort((a, b) => (nextOf(a) || "9").localeCompare(nextOf(b) || "9") || b.score - a.score);
-    return `<div class="lane" data-lane="${k}"><h3>${l}<span>${cs.length}</span></h3>${cs.map(c => `<div class="card" draggable="true" data-id="${c.id}">${av(c)}<div style="min-width:0;flex:1"><b>${esc(c.name)}</b><span>${c.score}/20 · ${esc(c.vertical)}</span>${nextOf(c) ? `<span class="due ${dueCls(nextOf(c))}">Follow up ${dueLabel(nextOf(c)).toLowerCase()}</span>` : ""}<select class="stagesel mini" data-id="${c.id}" aria-label="Move ${esc(c.name)}">${STAGES.map(s => `<option value="${s[0]}" ${k === s[0] ? "selected" : ""}>${s[0] === k ? "Move to…" : s[1]}</option>`).join("")}<option value="">Back to triage</option></select></div></div>`).join("") || `<div class="qempty" style="padding:18px 6px">${k === "todo" ? "Hit Chase on a lead to add it here." : "Nothing here yet."}</div>`}</div>`;
+    return `<div class="lane" data-lane="${k}"><h3>${l}<span>${cs.length}</span></h3>${cs.map(c => `<div class="card" draggable="true" data-id="${c.id}">${av(c)}<div style="min-width:0;flex:1"><b>${esc(c.name)}</b><span>${c.score}/20 · ${esc(c.vertical)}</span>${(() => { const a = nextAction(c); if (!a) return ""; const n = nextOf(c); return `<div class="cta"><em style="color:${a[1]}">${a[0]}${n ? `<span class="due ${dueCls(n)}" style="display:block">${dueLabel(n)}</span>` : ""}</em>${k !== "pass" ? `<button data-log="${c.id}">Log</button>` : ""}</div>`; })()}<select class="stagesel mini" data-id="${c.id}" aria-label="Move ${esc(c.name)}">${STAGES.map(s => `<option value="${s[0]}" ${k === s[0] ? "selected" : ""}>${s[0] === k ? "Move to…" : s[1]}</option>`).join("")}<option value="">Back to triage</option></select></div></div>`).join("") || `<div class="qempty" style="padding:18px 6px">${k === "todo" ? "Hit Chase on a lead to add it here." : "Nothing here yet."}</div>`}</div>`;
   }).join("");
 }
 const board = $("board");
@@ -283,30 +310,23 @@ board.addEventListener("dragstart", e => { const c = e.target.closest(".card"); 
 board.addEventListener("dragend", e => { const c = e.target.closest(".card"); if (c) c.classList.remove("dragging"); board.querySelectorAll(".lane").forEach(x => x.classList.remove("over")); });
 board.addEventListener("dragover", e => { const l = e.target.closest(".lane"); if (l) { e.preventDefault(); board.querySelectorAll(".lane").forEach(x => x.classList.toggle("over", x === l)); } });
 board.addEventListener("drop", e => { const l = e.target.closest(".lane"); if (!l) return; e.preventDefault(); const c = list.find(x => x.id === e.dataTransfer.getData("text/plain")); if (c && stage(c) !== l.dataset.lane) setStage(c, l.dataset.lane); });
-board.addEventListener("click", e => { if (e.target.closest(".stagesel")) return; const c = e.target.closest(".card"); if (c) openC(c.dataset.id); });
+board.addEventListener("click", e => { if (e.target.closest(".stagesel")) return; const lg = e.target.closest("[data-log]"); if (lg) { logAction(list.find(x => x.id === lg.dataset.log)); return; } const c = e.target.closest(".card"); if (c) openC(c.dataset.id); });
 
 // ---------- candidates ----------
 const parseSkills = s => [...new Set(s.split(",").map(x => x.trim().toLowerCase().replace(/\.js$/, "")).filter(Boolean))];
 $("f-save").onclick = () => {
   const name = $("f-name").value.trim(); if (!name) { $("f-name").focus(); return; }
-  CANDS.push({ id: "k" + Date.now(), name, role: $("f-role").value.trim(), skills: parseSkills($("f-skills").value), loc: $("f-loc").value.trim(), sen: $("f-sen").value });
+  const raw = $("f-skills").value.trim();
+  CANDS.push({ id: "k" + Date.now(), name, role: $("f-role").value.trim(), bool: isBool(raw) ? raw : "", skills: isBool(raw) ? [] : parseSkills(raw), loc: $("f-loc").value.trim(), sen: $("f-sen").value });
   saveC(); ["f-name", "f-role", "f-skills", "f-loc"].forEach(i => $(i).value = ""); refresh();
-};
-$("f-sample").onclick = () => {
-  const t = Date.now();
-  CANDS.push(
-    { id: "k" + t + 1, name: "Example: exchange backend", role: "Senior Backend Engineer", skills: ["backend", "node", "typescript", "postgres", "kafka", "aws"], loc: "London", sen: "Senior" },
-    { id: "k" + t + 2, name: "Example: payments full stack", role: "Full Stack Engineer", skills: ["full stack", "frontend", "react", "typescript", "node", "payments"], loc: "Remote EU", sen: "Senior" },
-    { id: "k" + t + 3, name: "Example: DeFi protocol", role: "Blockchain Engineer", skills: ["blockchain", "solidity", "evm", "typescript", "rust", "defi"], loc: "London", sen: "Staff / Lead" });
-  saveC(); refresh();
 };
 function renderCands() {
   $("clist").innerHTML = CANDS.length ? CANDS.map(k => {
     const ms = list.filter(c => c.matches.some(m => m.k.id === k.id)).sort((a, b) => b.score - a.score);
     return `<div class="cand"><div style="display:flex;align-items:flex-start;gap:8px"><div><h3>${esc(k.name)}</h3><p>${esc([k.role, k.sen, k.loc].filter(Boolean).join(" · "))}</p></div><button class="x" data-del="${k.id}">Remove</button></div>
-    <div class="tags" style="flex-wrap:wrap">${k.skills.map(s => `<span class="tag t-plain">${esc(s)}</span>`).join("")}</div>
+    <div class="tags" style="flex-wrap:wrap">${k.bool ? `<span class="tag t-match">${esc(k.bool)}</span>` : (k.skills || []).map(s => `<span class="tag t-plain">${esc(s)}</span>`).join("")}</div>
     <div class="mt">${ms.length ? `Fits <b>${ms.length}</b> lead${ms.length > 1 ? "s" : ""}: ${ms.slice(0, 4).map(c => `<button data-open-c="${c.id}">${esc(c.name)}</button>`).join(", ")}${ms.length > 4 ? ` and ${ms.length - 4} more` : ""}` : "No matching leads yet"}</div></div>`;
-  }).join("") : `<div class="panel"><div class="qempty">No candidates yet. Add who you're working with, or load 3 examples to see how matching works.</div></div>`;
+  }).join("") : `<div class="panel"><div class="qempty">No candidates yet. Add who you're working with and every lead gets checked against them.</div></div>`;
 }
 $("clist").addEventListener("click", e => { const d = e.target.closest("[data-del]"); if (d) { CANDS = CANDS.filter(k => k.id !== d.dataset.del); saveC(); refresh(); return; } const o = e.target.closest("[data-open-c]"); if (o) openC(o.dataset.openC); });
 
@@ -323,9 +343,10 @@ function renderSources() {
     ["X (Twitter)", "Hiring posts across crypto, plus projects flagged by accounts you track, like @ustyianskyi. Edit the accounts in config/sources.json.", "About $15/mo via TwitterAPI.io, add TWITTERAPI_KEY", live("x", true), S2.x],
     ["GitHub activity", "Flags companies where more people are committing code than last month, often before roles go public. Checks about 60 companies a day on rotation.", "Free", live("github"), S2.github],
     ["Farcaster", "Hiring casts from crypto founders and builders.", "Free tier via Neynar, add NEYNAR_API_KEY", live("farcaster", true), S2.farcaster],
-    ["Apollo.io", "Finds the CTO or Head of Engineering for new Hot leads, a few a day to save credits.", "Add APOLLO_API_KEY", live("apollo", true), S2.apollo]
+    ["Apollo.io", "Finds the CTO or Head of Engineering for new Hot leads, a few a day to save credits.", "Add APOLLO_API_KEY", live("apollo", true), S2.apollo],
+    ["Market data", "Hiring index from BD Radar itself, plus BTC, ETH, DeFi TVL, stablecoin supply, DEX volume and capital raised.", "Free, CoinGecko and DeFiLlama", live("market"), S2.market]
   ];
-  const GROUPS = [["Job sources", ["Company job boards", "VC portfolio job boards", "Crypto job sites"]], ["Social", ["Telegram", "X (Twitter)", "Farcaster"]], ["Signals and contacts", ["Funding rounds", "GitHub activity", "Apollo.io"]]];
+  const GROUPS = [["Job sources", ["Company job boards", "VC portfolio job boards", "Crypto job sites"]], ["Social", ["Telegram", "X (Twitter)", "Farcaster"]], ["Signals and contacts", ["Funding rounds", "GitHub activity", "Apollo.io"]], ["Market", ["Market data"]]];
   const card = ([t, d, cost, [lab, cls], info]) => `<div class="src"><div class="src-top"><h3>${t}</h3><span class="tag ${cls}">${lab}</span></div><p>${d}</p><div class="cost">${cost}</div>${info && info.notes && info.notes.length ? `<details><summary>Last run details</summary><ul>${info.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}</div>`;
   $("srcs").innerHTML = GROUPS.map(([g, names]) => `<h2 class="srcgroup">${g}</h2><div class="srcgrid">${names.map(n => card(cards.find(c => c[0] === n))).join("")}</div>`).join("");
 }
@@ -352,5 +373,79 @@ $("forget").onclick = () => { store.del("bdr-pass"); location.reload(); };
 // ---------- nav ----------
 function go(v) { document.querySelectorAll(".view").forEach(x => x.classList.toggle("on", x.id === "v-" + v)); document.querySelectorAll(".nav").forEach(n => { if (n.dataset.view === v) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current"); }); document.querySelector("main").scrollTop = 0; }
 document.querySelectorAll(".nav").forEach(n => n.onclick = () => go(n.dataset.view));
-function refresh() { computeMatches(); renderOverview(); renderQueue(); render(); renderBoard(); renderCands(); if (selected && drawer.classList.contains("on")) drawHTML(); }
+// ---------- market ----------
+const RANGES = [["2W", 14], ["1M", 30], ["3M", 90], ["6M", 182], ["1Y", 365]];
+let RANGE = store.get(PFX + "range", 30);
+const MK = [
+  ["roles", "Open eng roles", "Engineering roles live across every company on the radar today.", "BD Radar", "n"],
+  ["cos", "Companies hiring", "Companies on the radar with at least one engineering role open.", "BD Radar", "n"],
+  ["raised", "Capital raised / wk", "Crypto venture funding announced each week.", "DeFiLlama", "m"],
+  ["tvl", "DeFi TVL", "Total value locked across DeFi. A proxy for on chain activity.", "DeFiLlama", "$"],
+  ["stables", "Stablecoin supply", "Total stablecoins in circulation. Rising supply usually means fresh capital.", "DeFiLlama", "$"],
+  ["dex", "DEX volume / day", "Daily trading volume on decentralised exchanges.", "DeFiLlama", "$"],
+  ["btc", "Bitcoin", "BTC price in USD.", "CoinGecko", "$"],
+  ["eth", "Ethereum", "ETH price in USD.", "CoinGecko", "$"],
+  ["sol", "Solana", "SOL price in USD.", "CoinGecko", "$"]
+];
+const MKC = { roles: "var(--mint)", cos: "var(--mint)", raised: "var(--amber)", stables: "var(--amber)", btc: "var(--sky)", eth: "var(--sky)", sol: "var(--sky)", tvl: "var(--violet)", dex: "var(--violet)" };
+const MKHEX = { "var(--mint)": "#5EEAD4", "var(--amber)": "#F7B955", "var(--sky)": "#7DD3FC", "var(--violet)": "#A78BFA" };
+const SWITCH = [["capital", "Capital", [["raised", "Raised"], ["stables", "Stables"]], "Funding today becomes hiring in 1 to 3 months."], ["markets", "Markets", [["btc", "BTC"], ["eth", "ETH"], ["sol", "SOL"]], "Prices drive sentiment and hiring budgets."], ["chain", "On chain", [["tvl", "TVL"], ["dex", "DEX vol"]], "Real usage. Busy protocols scale their teams."]];
+let SWSEL = store.get(PFX + "sw", { capital: "raised", markets: "btc", chain: "tvl" });
+const fmtV = (v, u) => { if (v == null) return "n/a"; if (u === "n") return Math.round(v).toLocaleString("en-GB"); if (u === "m") return `$${v >= 1000 ? (v / 1000).toFixed(1) + "B" : Math.round(v) + "M"}`; const a = Math.abs(v); return "$" + (a >= 1e12 ? (v / 1e12).toFixed(2) + "T" : a >= 1e9 ? (v / 1e9).toFixed(1) + "B" : a >= 1e6 ? (v / 1e6).toFixed(1) + "M" : a >= 1e4 ? Math.round(v / 1e3) + "k" : Math.round(v).toLocaleString("en-GB")); };
+function slice(key) {
+  const s = (DATA.market && DATA.market.series && DATA.market.series[key]) || [];
+  const cut = new Date(Date.now() - RANGE * DAY).toISOString().slice(0, 10);
+  return s.filter(p => p[0] >= cut).map(p => [p[0], +p[1]]);
+}
+function change(pts) { if (pts.length < 2 || !pts[0][1]) return null; return (pts[pts.length - 1][1] - pts[0][1]) / pts[0][1] * 100; }
+function pathFor(pts, w, h, pad = 2) {
+  const ys = pts.map(p => p[1]), lo = Math.min(...ys), hi = Math.max(...ys), span = hi - lo || 1;
+  return pts.map((p, i) => [pad + i / Math.max(1, pts.length - 1) * (w - pad * 2), h - pad - (p[1] - lo) / span * (h - pad * 2)]);
+}
+function svgLine(pts, w, h, big, col = "#E8E8E9") {
+  if (pts.length < 2) return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" y1="${h - 1}" x2="${w}" y2="${h - 1}" stroke="rgba(255,255,255,.12)" stroke-dasharray="2 4"/></svg>`;
+  const xy = pathFor(pts, w, h), d = xy.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
+  const id = "g" + Math.random().toString(36).slice(2, 7), last = xy[xy.length - 1];
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity="${big ? .22 : .26}"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs><path d="${d}L${last[0]},${h}L${xy[0][0]},${h}Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${col}" stroke-opacity=".95" stroke-width="${big ? 1.4 : 1.2}" vector-effect="non-scaling-stroke"/>${big ? `<line class="cross" x1="0" x2="0" y1="0" y2="${h}" stroke="rgba(244,233,218,.35)" stroke-width="1" vector-effect="non-scaling-stroke" visibility="hidden"/>` : ""}</svg>`;
+}
+function setupRanges() {
+  ["rangesB"].forEach(id => { $(id).innerHTML = RANGES.map(([l, d]) => `<button data-range="${d}" aria-pressed="${d === RANGE}">${l}</button>`).join(""); });
+  document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => { RANGE = +b.dataset.range; store.set(PFX + "range", RANGE); document.querySelectorAll("[data-range]").forEach(x => x.setAttribute("aria-pressed", +x.dataset.range === RANGE)); renderMarket(); });
+}
+function renderMarket() {
+  if (!DATA) return;
+  const card = (k, big) => {
+    const m = MK.find(x => x[0] === k), pts = slice(k), last = pts.length ? pts[pts.length - 1][1] : null, ch = change(pts);
+    const chg = ch == null ? `<span class="chg">${pts.length < 2 ? "collecting" : ""}</span>` : `<span class="chg ${ch >= 0 ? "up" : "dn"}">${ch >= 0 ? "▲" : "▼"} ${Math.abs(ch).toFixed(1)}%</span>`;
+    if (!big) return `<button class="mcard" data-mk="${k}" data-tip="${m[2]}"><div class="k"><span class="label">${m[1]}</span>${chg}</div><div class="v">${fmtV(last, m[4])}</div><div class="spark">${svgLine(pts, 200, 40)}</div></button>`;
+    return `<div class="panel mbig" data-chart="${k}" style="--c:${MKC[k] || "var(--line2)"}"><div class="panel-head"><h2 data-tip="${m[2]}">${m[1]}</h2>${chg}</div><div class="v">${fmtV(last, m[4])}</div><div class="chart">${svgLine(pts, 600, 170, true, MKHEX[MKC[k]] || "#E8E8E9")}<div class="tip"></div></div><div class="msrc">${m[3]}${pts.length ? ` · ${pts.length} data points` : ""}</div></div>`;
+  };
+  const chgHtml = pts => { const ch = change(pts); return ch == null ? `<span class="chg">${pts.length < 2 ? "collecting" : ""}</span>` : `<span class="chg ${ch >= 0 ? "up" : "dn"}">${ch >= 0 ? "▲" : "▼"} ${Math.abs(ch).toFixed(1)}%</span>`; };
+  const rp = slice("roles"), cp = slice("cos"), lv = p => p.length ? p[p.length - 1][1] : null;
+  const hiring = `<div class="mcard" style="--c:var(--mint)"><div class="k"><span class="label" data-tip="Live engineering roles and companies hiring across everything on the radar. Collected by BD Radar every morning.">Hiring</span><div class="ranges" id="rangesA">${RANGES.map(([l, d]) => `<button data-range="${d}" aria-pressed="${d === RANGE}">${l}</button>`).join("")}</div></div><div class="duo"><div><div class="v">${fmtV(lv(rp), "n")}</div><small>open eng roles ${chgHtml(rp)}</small></div><div><div class="v">${fmtV(lv(cp), "n")}</div><small>companies hiring ${chgHtml(cp)}</small></div></div><div class="spark">${svgLine(rp, 300, 40, false, "#5EEAD4")}</div></div>`;
+  const sw = SWITCH.map(([id, label, opts, why]) => { const k = SWSEL[id] || opts[0][0], m = MK.find(x => x[0] === k), p = slice(k), col = MKC[k];
+    return `<div class="mcard" style="--c:${col}"><div class="k"><span class="label" data-tip="${m[2]}">${label}</span><div class="sw">${opts.map(([v, t]) => `<button data-sw="${id}" data-k="${v}" aria-pressed="${v === k}">${t}</button>`).join("")}</div></div><div class="v">${fmtV(lv(p), m[4])}</div>${chgHtml(p)}<div class="spark">${svgLine(p, 200, 40, false, MKHEX[col])}</div><div class="why">${why}</div></div>`; }).join("");
+  $("mrow").innerHTML = hiring + sw;
+  $("mrow").querySelectorAll("[data-sw]").forEach(b => b.onclick = () => { SWSEL[b.dataset.sw] = b.dataset.k; store.set(PFX + "sw", SWSEL); renderMarket(); });
+  $("mrow").querySelectorAll("[data-range]").forEach(b => b.onclick = () => { RANGE = +b.dataset.range; store.set(PFX + "range", RANGE); setupRanges(); renderMarket(); });
+  $("mgrid").innerHTML = MK.map(m => card(m[0], true)).join("");
+  document.querySelectorAll("[data-chart]").forEach(el => {
+    const k = el.dataset.chart, m = MK.find(x => x[0] === k), pts = slice(k), box = el.querySelector(".chart"), tip = el.querySelector(".tip"), cross = el.querySelector(".cross");
+    if (pts.length < 2) return;
+    box.onmousemove = e => {
+      const r = box.getBoundingClientRect(), f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), i = Math.round(f * (pts.length - 1));
+      const x = i / (pts.length - 1) * r.width;
+      tip.style.left = x + "px"; tip.textContent = `${new Date(pts[i][0] + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · ${fmtV(pts[i][1], m[4])}`;
+      if (cross) { const vx = i / (pts.length - 1) * 600; cross.setAttribute("x1", vx); cross.setAttribute("x2", vx); cross.setAttribute("visibility", "visible"); }
+      box.classList.add("hov");
+    };
+    box.onmouseleave = () => { box.classList.remove("hov"); if (cross) cross.setAttribute("visibility", "hidden"); };
+  });
+}
+
+
+// ---------- settings ----------
+["cad0", "cad1", "cad2"].forEach((id, i) => { $(id).value = CAD[i]; $(id).onchange = () => { const v = Math.max(1, Math.round(+$(id).value || CAD[i])); CAD[i] = v; CAD = [CAD[0], Math.max(CAD[1], CAD[0] + 1), Math.max(CAD[2], Math.max(CAD[1], CAD[0] + 1) + 1)]; store.set(PFX + "cad", CAD); ["cad0", "cad1", "cad2"].forEach((x, j) => $(x).value = CAD[j]); refresh(); }; });
+
+function refresh() { computeMatches(); renderMarket(); renderOverview(); renderQueue(); render(); renderBoard(); renderCands(); if (selected && drawer.classList.contains("on")) drawHTML(); }
 boot();
