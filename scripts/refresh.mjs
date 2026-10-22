@@ -273,9 +273,24 @@ async function marketData(H, companies, report) {
   H.mkt.roles[TODAY] = companies.reduce((a, c) => a + c.roles.length, 0);
   H.mkt.cos[TODAY] = companies.filter(c => c.roles.length).length;
   for (const k of ["roles", "cos"]) for (const d of Object.keys(H.mkt[k])) if (daysSince(d) > 400) delete H.mkt[k][d];
-  series.roles = Object.entries(H.mkt.roles).sort();
-  series.cos = Object.entries(H.mkt.cos).sort();
+  // backfill from posting dates: a role counts as open from the day it was posted until it closed
+  const est = { roles: {}, cos: {} };
+  const spans = [];
+  for (const c of companies) for (const r of c.roles) spans.push([c.id, r.firstSeen, null]);
+  for (const [k, list] of Object.entries(H.closed || {})) for (const x of list) spans.push([k, dayKey(new Date(x.closed).getTime() - (x.openDays || 0) * DAY), x.closed]);
+  for (let i = 365; i >= 1; i--) {
+    const d = dayKey(NOW.getTime() - i * DAY), cos = new Set(); let n = 0;
+    for (const [k, from, to] of spans) if (from && from <= d && (!to || to > d)) { n++; cos.add(k); }
+    if (n) { est.roles[d] = n; est.cos[d] = cos.size; }
+  }
+  series.roles = Object.entries({ ...est.roles, ...H.mkt.roles }).sort();
+  series.cos = Object.entries({ ...est.cos, ...H.mkt.cos }).sort();
+  series.trackedFrom = Object.keys(H.mkt.roles).sort()[0];
   // capital raised per week (DeFiLlama raises, crypto wide)
+  // raises we find in the news are kept, so the weekly series builds up even without DeFiLlama
+  H.mkt.raises = H.mkt.raises || {};
+  for (const c of companies) if (c.funding && c.funding.amountM) H.mkt.raises[`${norm(c.name)}|${c.funding.date}`] = [c.funding.date, c.funding.amountM];
+  if (!RAW_RAISES.length) RAW_RAISES = Object.values(H.mkt.raises).map(([d, a]) => ({ date: new Date(d).getTime() / 1000, amount: a }));
   if (RAW_RAISES.length) {
     const wk = {}, wn = {};
     for (const r of RAW_RAISES) {
@@ -543,7 +558,7 @@ function score(c) {
 function story(c) {
   const R = c.roles, F = c.funding, bits = [];
   if (R.length) { const newest = Math.min(...R.map(r => r.age)); bits.push(`${R.length} open engineering role${R.length > 1 ? "s" : ""} (${c.disc.join(", ")}), newest posted ${newest === 0 ? "today" : newest === 1 ? "yesterday" : newest + " days ago"}.`); }
-  if (F) bits.push(`Raised ${F.amountM ? "$" + (+F.amountM.toFixed(1)) + "m" : "an undisclosed amount"} (${F.round}) on ${F.date}.`);
+  if (F) bits.push(`Raised ${F.amountM ? "$" + (+F.amountM.toFixed(1)) + "m" : "an undisclosed amount"}${F.round && F.round !== "Undisclosed round" ? ` (${F.round})` : ""} on ${F.date}.`);
   const hp = c.social.filter(s => !s.via);
   if (hp.length) bits.push(`Hiring posts on ${[...new Set(hp.map(s => s.platform))].join(" and ")}.`);
   if (c.dev && c.dev.spike) bits.push(`${c.dev.contributors} people committing code in the last 30 days, up from ${c.dev.prevContributors}${c.dev.newRepos ? `, plus ${c.dev.newRepos} new repos` : ""}.`);

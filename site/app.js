@@ -127,10 +127,10 @@ const computeMatches = () => list.forEach(c => c.matches = matchesFor(c));
 // ---------- helpers ----------
 const initials = n => n.replace(/[^A-Za-z0-9 ]/g, "").split(" ").filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || n[0];
 const av = c => `<div class="avatar" style="background:${c.color}">${esc(initials(c.name))}</div>`;
-const what = c => c.roles.length ? c.roles.map(r => r.title).join(", ") : c.funding ? `${fmtM(c.funding.amountM)}, ${c.funding.round}` : c.social[0] ? c.social[0].text : c.dev ? `${c.dev.contributors} active engineers on GitHub` : "";
+const what = c => c.roles.length ? c.roles[0].title + (c.roles.length > 1 ? `  +${c.roles.length - 1} more` : "") : c.funding ? `${fmtM(c.funding.amountM)}${c.funding.round && c.funding.round !== "Undisclosed round" ? ", " + c.funding.round : ""}` : c.social[0] ? c.social[0].text : c.dev ? `${c.dev.contributors} active engineers on GitHub` : "";
 const contactLine = c => c.contact && c.contact.name ? `${c.contact.name}, ${c.contact.title || ""}` : c.contact && c.contact.hidden ? `${c.contact.title || "Decision maker"} (hidden in demo)` : "CTO or Head of Engineering";
 function tags(c) {
-  return `${c.isNew ? '<span class="tag t-ok">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.surge ? `<span class="tag t-surge" data-tip="Roles jumped from ${c.surge.from} to ${c.surge.to} in a week.">Surge</span>` : ""}${c.social.some(x => x.via) ? '<span class="tag t-social">Flagged on X</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.closing.length >= 2 ? '<span class="tag t-plain">Closing fast</span>' : ""}${c.backers && c.backers.length ? `<span class="tag t-plain" data-tip="Roles found on the ${esc(c.backers.join(", "))} portfolio job board.">VC backed</span>` : ""}${c.stale ? '<span class="tag t-stale" data-tip="A role has been open 30+ days or was reposted.">Stale</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
+  return `${c.isNew ? '<span class="tag t-ok" data-tip="Discovered by the radar today. Its roles may have been posted earlier.">New</span>' : ""}${c.roles.length ? '<span class="tag t-hire">Hiring</span>' : ""}${c.funding ? '<span class="tag t-fund">Raised</span>' : ""}${c.social.length ? '<span class="tag t-social">Social</span>' : ""}${c.surge ? `<span class="tag t-surge" data-tip="Roles jumped from ${c.surge.from} to ${c.surge.to} in a week.">Surge</span>` : ""}${c.social.some(x => x.via) ? '<span class="tag t-social">Flagged on X</span>' : ""}${c.dev && c.dev.spike ? '<span class="tag t-social">GitHub</span>' : ""}${c.closing.length >= 2 ? '<span class="tag t-plain">Closing fast</span>' : ""}${c.backers && c.backers.length ? `<span class="tag t-plain" data-tip="Roles found on the ${esc(c.backers.join(", "))} portfolio job board.">VC backed</span>` : ""}${c.stale ? '<span class="tag t-stale" data-tip="A role has been open 30+ days or was reposted. They&#39;re struggling to hire, which makes them open to help.">Hard to fill</span>' : ""}${c.matches.length ? `<span class="tag t-match">${c.matches.length} match${c.matches.length > 1 ? "es" : ""}</span>` : ""}`;
 }
 
 // ---------- start ----------
@@ -145,6 +145,21 @@ function start(d) {
   $("lock").remove();
   if (DEMO) {
     document.body.classList.add("demo");
+    if (!store.get(PFX + "seeded2", false)) {
+      const ranked = [...list].sort((a, b) => b.score - a.score), top = ranked.length > 25 ? ranked.slice(8) : ranked;
+      const plan = [["todo", 0, 0], ["todo", 0, 1], ["contacted", 0, 0], ["contacted", 1, -1], ["contacted", 2, 2], ["replied", 0, 1], ["meeting", 0, 3], ["client", 0, 7], ["pass", 0, 0]];
+      plan.forEach(([stg, fu, nx], i) => { const c = top[i]; if (c) S[c.name] = { stage: stg, fu, next: addDays(nx), contacted: addDays(-4 - i) }; });
+      save(); store.set(PFX + "seeded2", true);
+    }
+    if (!store.get(PFX + "seededC", false) && !CANDS.length) {
+      CANDS = [
+        { id: "s1", sample: true, name: "Senior backend, ex exchange", role: "Senior Backend Engineer", bool: "backend AND (senior OR staff OR lead)", skills: [], loc: "London", sen: "Senior" },
+        { id: "s2", sample: true, name: "Full stack, payments", role: "Full Stack Engineer", bool: "(frontend OR \"full stack\" OR fullstack) NOT intern", skills: [], loc: "Remote EU", sen: "Senior" },
+        { id: "s3", sample: true, name: "Protocol engineer", role: "Smart Contract Engineer", bool: "(solidity OR rust OR protocol OR blockchain OR \"smart contract\")", skills: [], loc: "London", sen: "Staff / Lead" },
+        { id: "s4", sample: true, name: "Platform and infra", role: "Platform Engineer", bool: "(platform OR devops OR sre OR infrastructure OR security)", skills: [], loc: "Remote UK", sen: "Senior" }
+      ];
+      saveC(); store.set(PFX + "seededC", true);
+    }
   }
   document.querySelector(".app").hidden = false;
   const hr = new Date().getHours();
@@ -180,7 +195,7 @@ $("leads").addEventListener("click", e => { const t = e.target.closest("[data-ti
 let tab = "triage";
 document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { tab = b.dataset.tab; document.querySelectorAll("[data-tab]").forEach(x => x.setAttribute("aria-selected", x === b)); renderQueue(); });
 function renderQueue() {
-  const tri = list.filter(untriaged).sort((a, b) => (b.isNew - a.isNew) || b.score - a.score || b.matches.length - a.matches.length);
+  const tri = list.filter(untriaged).sort((a, b) => b.score - a.score || b.matches.length - a.matches.length);
   const due = list.filter(isDue).sort((a, b) => nextOf(a).localeCompare(nextOf(b)));
   $("t-tri").textContent = tri.length; $("t-due").textContent = due.length;
   const q = $("queue");
@@ -242,14 +257,14 @@ function render() {
     <td><div class="tags">${tags(c)}</div></td>
     <td><span class="score">${c.score}<span class="meter"><i class="${c.tier}" style="width:${c.score * 5}%"></i></span></span></td>
     <td><div class="role" title="${esc(what(c))}" style="color:var(--ink)">${esc(what(c))}</div><div class="role" style="font-size:.7rem">${c.disc.length ? esc(c.disc.join(" · ")) : c.funding ? "Roles not live yet" : c.dev && c.dev.spike ? "Team growing on GitHub" : "From social"}</div></td>
-    <td><div class="role" style="max-width:220px">${c.contact && (c.contact.name || c.contact.hidden) ? '<span class="tag t-ok" style="margin-right:6px">Apollo</span>' : ""}${esc(contactLine(c))}</div></td>
+    <td>${c.contact && c.contact.name && !DEMO ? `<div class="role">${esc(contactLine(c))}</div>` : `<a class="lnk" data-stop href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${c.name} (CTO OR "VP Engineering" OR "Head of Engineering")`)}" target="_blank" rel="noopener" data-tip="Opens a LinkedIn search for their CTO or Head of Engineering.">Find CTO ↗</a>`}</td>
     <td>${(() => { const a = ACTIVE.includes(stage(c)) && nextAction(c); return a ? `<div class="due" style="color:${a[1]};margin-bottom:.25rem">${a[0]}</div>` : ""; })()}<select class="status stagesel" data-s="${stage(c)}" data-id="${c.id}" aria-label="Stage for ${esc(c.name)}"><option value="" ${!stage(c) ? "selected" : ""}>Not triaged</option>${STAGES.map(s => `<option value="${s[0]}" ${stage(c) === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}</select></td>
     <td><span class="due ${dueCls(nextOf(c))}">${nextOf(c) ? dueLabel(nextOf(c)) : (snoozed(c) ? "Snoozed" : "")}</span></td></tr>`).join("")
     + (r.length > 300 ? `<tr><td colspan="7"><div class="empty">Showing the top 300 of ${r.length}. Narrow the filters to see the rest.</div></td></tr>` : "")
     : `<tr><td colspan="7"><div class="empty">${EMPTY[sig] || "No companies match these filters. Lower the minimum score or clear the search."}</div></td></tr>`;
 }
 document.addEventListener("change", e => { if (e.target.classList.contains("stagesel")) { const c = list.find(x => x.id === e.target.dataset.id); setStage(c, e.target.value); } });
-$("rows").addEventListener("click", e => { if (e.target.closest(".stagesel")) return; const tr = e.target.closest("tr[data-id]"); if (tr) openC(tr.dataset.id); });
+$("rows").addEventListener("click", e => { if (e.target.closest(".stagesel") || e.target.closest("[data-stop]")) return; const tr = e.target.closest("tr[data-id]"); if (tr) openC(tr.dataset.id); });
 $("rows").addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest(".stagesel")) { const tr = e.target.closest("tr[data-id]"); if (tr) openC(tr.dataset.id); } });
 
 // ---------- drawer ----------
@@ -323,7 +338,7 @@ $("f-save").onclick = () => {
 function renderCands() {
   $("clist").innerHTML = CANDS.length ? CANDS.map(k => {
     const ms = list.filter(c => c.matches.some(m => m.k.id === k.id)).sort((a, b) => b.score - a.score);
-    return `<div class="cand"><div style="display:flex;align-items:flex-start;gap:8px"><div><h3>${esc(k.name)}</h3><p>${esc([k.role, k.sen, k.loc].filter(Boolean).join(" · "))}</p></div><button class="x" data-del="${k.id}">Remove</button></div>
+    return `<div class="cand"><div style="display:flex;align-items:flex-start;gap:8px"><div><h3>${esc(k.name)}${k.sample ? ' <span class="tag t-plain" style="vertical-align:2px">Sample</span>' : ""}</h3><p>${esc([k.role, k.sen, k.loc].filter(Boolean).join(" · "))}</p></div><button class="x" data-del="${k.id}">Remove</button></div>
     <div class="tags" style="flex-wrap:wrap">${k.bool ? `<span class="tag t-match">${esc(k.bool)}</span>` : (k.skills || []).map(s => `<span class="tag t-plain">${esc(s)}</span>`).join("")}</div>
     <div class="mt">${ms.length ? `Fits <b>${ms.length}</b> lead${ms.length > 1 ? "s" : ""}: ${ms.slice(0, 4).map(c => `<button data-open-c="${c.id}">${esc(c.name)}</button>`).join(", ")}${ms.length > 4 ? ` and ${ms.length - 4} more` : ""}` : "No matching leads yet"}</div></div>`;
   }).join("") : `<div class="panel"><div class="qempty">No candidates yet. Add who you're working with and every lead gets checked against them.</div></div>`;
@@ -333,22 +348,25 @@ $("clist").addEventListener("click", e => { const d = e.target.closest("[data-de
 // ---------- sources ----------
 function renderSources() {
   const S2 = DATA.sources || {};
-  const live = (k, paid) => { const s = S2[k]; if (!s) return ["Planned", "t-plain"]; if (!s.ok && paid) return ["Add key", "t-p1"]; return [`Live · ${s.count}`, "t-ok"]; };
+  const on = k => S2[k] && S2[k].ok && (S2[k].count || 0) > 0;
+  const badge = k => on(k) ? [`Live · ${S2[k].count}`, "t-ok"] : DEMO ? ["Plug in", "t-plain"] : (S2[k] ? ["Add key", "t-p1"] : ["Planned", "t-plain"]);
   const cards = [
-    ["Company job boards", "Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee, Personio, Teamtailor and BambooHR boards for every watchlist company, plus any company the radar has found before.", "Free", live("jobs"), S2.jobs],
-    ["VC portfolio job boards", "Every engineering role across Dragonfly, Polychain, Multicoin, Paradigm, Pantera, Variant, Blockchain Capital and more. Edit the list in config/sources.json.", "Free", live("vc"), S2.vc],
-    ["Crypto job sites", "Cryptocurrency Jobs, CryptoJobsList and Remote3, which list hundreds of companies you wouldn't think to watch.", "Free", live("sites"), S2.sites],
-    ["Funding rounds", "DeFiLlama raises plus raise headlines from CoinDesk, The Block, Blockworks, Decrypt and Cointelegraph.", "Free", live("funding"), S2.funding],
-    ["Telegram", "Public crypto job channels, read daily for \"X is hiring Y\" posts.", "Free", live("telegram"), S2.telegram],
-    ["X (Twitter)", "Hiring posts across crypto, plus projects flagged by accounts you track, like @ustyianskyi. Edit the accounts in config/sources.json.", "About $15/mo via TwitterAPI.io, add TWITTERAPI_KEY", live("x", true), S2.x],
-    ["GitHub activity", "Flags companies where more people are committing code than last month, often before roles go public. Checks about 60 companies a day on rotation.", "Free", live("github"), S2.github],
-    ["Farcaster", "Hiring casts from crypto founders and builders.", "Free tier via Neynar, add NEYNAR_API_KEY", live("farcaster", true), S2.farcaster],
-    ["Apollo.io", "Finds the CTO or Head of Engineering for new Hot leads, a few a day to save credits.", "Add APOLLO_API_KEY", live("apollo", true), S2.apollo],
-    ["Market data", "Hiring index from BD Radar itself, plus BTC, ETH, DeFi TVL, stablecoin supply, DEX volume and capital raised.", "Free, CoinGecko and DeFiLlama", live("market"), S2.market]
+    ["Company job boards", "Careers pages for every watchlist company across 9 hiring systems, plus every company the radar has found before.", "", "jobs"],
+    ["VC portfolio job boards", "Every engineering role across the portfolios of Dragonfly, Polychain, Multicoin, Paradigm, Pantera, Variant and more.", "", "vc"],
+    ["Crypto job sites", "Cryptocurrency Jobs, CryptoJobsList and Remote3, for companies you'd never think to watch.", "", "sites"],
+    ["Funding rounds", "Fresh raises from CoinDesk, The Block, Blockworks, Decrypt and Cointelegraph.", "", "funding"],
+    ["Telegram", "Public crypto job channels, read daily for hiring posts.", "", "telegram"],
+    ["X (Twitter)", "Hiring posts, plus projects flagged by smart money trackers before they raise.", "About $15/mo via TwitterAPI.io, add TWITTERAPI_KEY", "x"],
+    ["GitHub activity", "Spots teams where more engineers are committing code than last month, often before roles go public.", "", "github"],
+    ["Farcaster", "Hiring posts from crypto founders and builders.", "Free tier via Neynar, add NEYNAR_API_KEY", "farcaster"],
+    ["Apollo.io", "Finds the CTO or Head of Engineering at the best leads.", "Paid plan, add APOLLO_API_KEY", "apollo"],
+    ["Market data", "BD Radar's own hiring index, plus BTC, ETH, SOL, DeFi TVL, stablecoins and DEX volume from CoinGecko and DeFiLlama.", "", "market"]
   ];
-  const GROUPS = [["Job sources", ["Company job boards", "VC portfolio job boards", "Crypto job sites"]], ["Social", ["Telegram", "X (Twitter)", "Farcaster"]], ["Signals and contacts", ["Funding rounds", "GitHub activity", "Apollo.io"]], ["Market", ["Market data"]]];
-  const card = ([t, d, cost, [lab, cls], info]) => `<div class="src"><div class="src-top"><h3>${t}</h3><span class="tag ${cls}">${lab}</span></div><p>${d}</p><div class="cost">${cost}</div>${info && info.notes && info.notes.length ? `<details><summary>Last run details</summary><ul>${info.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}</div>`;
-  $("srcs").innerHTML = GROUPS.map(([g, names]) => `<h2 class="srcgroup">${g}</h2><div class="srcgrid">${names.map(n => card(cards.find(c => c[0] === n))).join("")}</div>`).join("");
+  const card = ([t, d, cost, k]) => { const [lab, cls] = badge(k), info = S2[k];
+    return `<div class="src"><div class="src-top"><h3>${t}</h3><span class="tag ${cls}">${lab}</span></div><p>${d}</p>${!DEMO && cost ? `<div class="cost">${cost}</div>` : ""}${!DEMO && info && info.notes && info.notes.length ? `<details><summary>Last run details</summary><ul>${info.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : ""}</div>`; };
+  const GROUPS = [["Job sources", ["Company job boards", "VC portfolio job boards", "Crypto job sites"]], ["Signals", ["Funding rounds", "Telegram", "GitHub activity", "Market data"]], ["Plug-ins", ["X (Twitter)", "Farcaster", "Apollo.io"]]];
+  const pick = names => names.map(n => cards.find(c => c[0] === n)).filter(c => !DEMO || on(c[3]) || ["x", "farcaster", "apollo"].includes(c[3]));
+  $("srcs").innerHTML = GROUPS.map(([g, names]) => { const cs = pick(names); return cs.length ? `<h2 class="srcgroup">${g}${g === "Plug-ins" ? ` <span style="text-transform:none;letter-spacing:0;color:var(--faint)">· optional, switch on with an API key</span>` : ""}</h2><div class="srcgrid">${cs.map(card).join("")}</div>` : ""; }).join("");
 }
 $("refreshbtn").href = `https://github.com/${REPO}/actions/workflows/daily.yml`;
 
@@ -418,17 +436,18 @@ function renderMarket() {
     const m = MK.find(x => x[0] === k), pts = slice(k), last = pts.length ? pts[pts.length - 1][1] : null, ch = change(pts);
     const chg = ch == null ? `<span class="chg">${pts.length < 2 ? "collecting" : ""}</span>` : `<span class="chg ${ch >= 0 ? "up" : "dn"}">${ch >= 0 ? "▲" : "▼"} ${Math.abs(ch).toFixed(1)}%</span>`;
     if (!big) return `<button class="mcard" data-mk="${k}" data-tip="${m[2]}"><div class="k"><span class="label">${m[1]}</span>${chg}</div><div class="v">${fmtV(last, m[4])}</div><div class="spark">${svgLine(pts, 200, 40)}</div></button>`;
-    return `<div class="panel mbig" data-chart="${k}" style="--c:${MKC[k] || "var(--line2)"}"><div class="panel-head"><h2 data-tip="${m[2]}">${m[1]}</h2>${chg}</div><div class="v">${fmtV(last, m[4])}</div><div class="chart">${svgLine(pts, 600, 170, true, MKHEX[MKC[k]] || "#E8E8E9")}<div class="tip"></div></div><div class="msrc">${m[3]}${pts.length ? ` · ${pts.length} data points` : ""}</div></div>`;
+    return `<div class="panel mbig" data-chart="${k}" style="--c:${MKC[k] || "var(--line2)"}"><div class="panel-head"><h2 data-tip="${m[2]}">${m[1]}</h2>${chg}</div><div class="v">${fmtV(last, m[4])}</div><div class="chart">${svgLine(pts, 600, 170, true, MKHEX[MKC[k]] || "#E8E8E9")}<div class="tip"></div></div><div class="msrc">${m[3]}${pts.length ? ` · ${pts.length} data point${pts.length === 1 ? "" : "s"}` : ""}</div></div>`;
   };
   const chgHtml = pts => { const ch = change(pts); return ch == null ? `<span class="chg">${pts.length < 2 ? "collecting" : ""}</span>` : `<span class="chg ${ch >= 0 ? "up" : "dn"}">${ch >= 0 ? "▲" : "▼"} ${Math.abs(ch).toFixed(1)}%</span>`; };
   const rp = slice("roles"), cp = slice("cos"), lv = p => p.length ? p[p.length - 1][1] : null;
   const hiring = `<div class="mcard" style="--c:var(--mint)"><div class="k"><span class="label" data-tip="Live engineering roles and companies hiring across everything on the radar. Collected by BD Radar every morning.">Hiring</span><div class="ranges" id="rangesA">${RANGES.map(([l, d]) => `<button data-range="${d}" aria-pressed="${d === RANGE}">${l}</button>`).join("")}</div></div><div class="duo"><div><div class="v">${fmtV(lv(rp), "n")}</div><small>open eng roles ${chgHtml(rp)}</small></div><div><div class="v">${fmtV(lv(cp), "n")}</div><small>companies hiring ${chgHtml(cp)}</small></div></div><div class="spark">${svgLine(rp, 300, 40, false, "#5EEAD4")}</div></div>`;
-  const sw = SWITCH.map(([id, label, opts, why]) => { const k = SWSEL[id] || opts[0][0], m = MK.find(x => x[0] === k), p = slice(k), col = MKC[k];
-    return `<div class="mcard" style="--c:${col}"><div class="k"><span class="label" data-tip="${m[2]}">${label}</span><div class="sw">${opts.map(([v, t]) => `<button data-sw="${id}" data-k="${v}" aria-pressed="${v === k}">${t}</button>`).join("")}</div></div><div class="v">${fmtV(lv(p), m[4])}</div>${chgHtml(p)}<div class="spark">${svgLine(p, 200, 40, false, MKHEX[col])}</div><div class="why">${why}</div></div>`; }).join("");
+  const has = k => (((DATA.market || {}).series || {})[k] || []).length >= 3;
+  const sw = SWITCH.map(([id, label, opts0, why]) => { const opts = opts0.filter(([v]) => has(v)); if (!opts.length) opts.push(opts0[0]); const k = opts.some(o => o[0] === SWSEL[id]) ? SWSEL[id] : opts[0][0], m = MK.find(x => x[0] === k), p = slice(k), col = MKC[k];
+    return `<div class="mcard" style="--c:${col}"><div class="k"><span class="label" data-tip="${m[2]}">${label}</span><div class="sw">${opts.length < 2 ? "" : opts.map(([v, t]) => `<button data-sw="${id}" data-k="${v}" aria-pressed="${v === k}">${t}</button>`).join("")}</div></div><div class="v">${fmtV(lv(p), m[4])}</div>${chgHtml(p)}<div class="spark">${svgLine(p, 200, 40, false, MKHEX[col])}</div><div class="why">${({ raised: "Funding today becomes hiring in 1 to 3 months.", stables: "New money entering crypto. Budgets follow.", btc: "Prices drive sentiment and hiring budgets.", eth: "Health of the Ethereum ecosystem.", sol: "Health of the Solana ecosystem.", tvl: "Real usage. Busy protocols scale their teams.", dex: "Trading activity on decentralised exchanges." })[k] || why}</div></div>`; }).join("");
   $("mrow").innerHTML = hiring + sw;
   $("mrow").querySelectorAll("[data-sw]").forEach(b => b.onclick = () => { SWSEL[b.dataset.sw] = b.dataset.k; store.set(PFX + "sw", SWSEL); renderMarket(); });
   $("mrow").querySelectorAll("[data-range]").forEach(b => b.onclick = () => { RANGE = +b.dataset.range; store.set(PFX + "range", RANGE); setupRanges(); renderMarket(); });
-  $("mgrid").innerHTML = MK.map(m => card(m[0], true)).join("");
+  $("mgrid").innerHTML = MK.filter(m => (((DATA.market || {}).series || {})[m[0]] || []).length >= 2).map(m => card(m[0], true)).join("");
   document.querySelectorAll("[data-chart]").forEach(el => {
     const k = el.dataset.chart, m = MK.find(x => x[0] === k), pts = slice(k), box = el.querySelector(".chart"), tip = el.querySelector(".tip"), cross = el.querySelector(".cross");
     if (pts.length < 2) return;
